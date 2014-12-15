@@ -51,6 +51,7 @@ for script in ["interval.py",
 for script in ["modint.py",
                "stp.py",
                "simplifications.py",
+               "expression_helper.py",
                ]:
     testset += RegressionTest([script], base_dir="expression")
 ## IR
@@ -153,6 +154,7 @@ for script in [["symbol_exec.py"],
                ["expression/simplification_tools.py"],
                ["expression/expr_grapher.py"],
                ["expression/simplification_add.py"],
+               ["expression/expr_random.py"],
                ]:
     testset += Example(script)
 ## Jitter

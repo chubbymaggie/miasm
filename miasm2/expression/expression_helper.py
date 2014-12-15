@@ -17,6 +17,12 @@
 #
 
 # Expressions manipulation functions
+import re
+import itertools
+import collections
+import random
+import string
+
 import miasm2.expression.expression as m2_expr
 
 
@@ -195,3 +201,325 @@ def get_missing_interval(all_intervals, i_min=0, i_max=32):
             missing_i.append((last_pos, start))
         last_pos = stop
     return missing_i
+
+
+class Variables_Identifier(object):
+    """Identify variables in an expression.
+    Returns:
+    - variables with their corresponding values
+    - original expression with variables translated
+    """
+
+    var_identifier = re.compile("v\d+")
+
+    def __init__(self, expr):
+        """Set the expression @expr to handle and launch variable identification
+        process"""
+
+        # Init
+        self.var_indice = itertools.count()
+        self.var_asked = set()
+        self._vars = {} # VarID -> Expr
+
+        # Launch recurrence
+        self.find_variables_rec(expr)
+
+        # Compute inter-variable dependencies
+        has_change = True
+        while has_change:
+            has_change = False
+            for var_id, var_value in self._vars.iteritems():
+                cur = var_value
+
+                # Do not replace with itself
+                to_replace = {v_val:v_id
+                              for v_id, v_val in self._vars.iteritems()
+                              if v_id != var_id}
+                var_value = var_value.replace_expr(to_replace)
+
+                if cur != var_value:
+                    # Force @self._vars update
+                    has_change = True
+                    self._vars[var_id] = var_value
+                    break
+
+        # Replace in the original equation
+        self._equation = expr.replace_expr({v_val: v_id for v_id, v_val
+                                            in self._vars.iteritems()})
+
+        # Compute variables dependencies
+        self._vars_ordered = collections.OrderedDict()
+        todo = set(self._vars.iterkeys())
+        needs = {}
+
+        ## Build initial needs
+        for var_id, var_expr in self._vars.iteritems():
+            needs[var_id] = [var_name
+                             for var_name in var_expr.get_r(mem_read=True)
+                             if self.is_var_identifier(var_name)]
+
+        ## Build order list
+        while todo:
+            done = set()
+            for var_id in todo:
+                all_met = True
+                for need in needs[var_id]:
+                    if need not in self._vars_ordered:
+                        # A dependency is not met
+                        all_met = False
+                        break
+
+                if not all_met:
+                    continue
+
+                # All dependencies are already met, add current
+                self._vars_ordered[var_id] = self._vars[var_id]
+                done.add(var_id)
+
+            # Update the todo list
+            for element_done in done:
+                todo.remove(element_done)
+
+    @classmethod
+    def is_var_identifier(cls, expr):
+        "Return True iff expr seems to be a variable identifier"
+        if not isinstance(expr, m2_expr.ExprId):
+            return False
+
+        match = cls.var_identifier.match(expr.name)
+        return match is not None and match.group(0) == expr.name
+
+    def find_variables_rec(self, expr):
+        """Recursive method called by find_variable to expand @expr.
+        Set @var_names and @var_values.
+        This implementation is faster than an expression visitor because
+        we do not rebuild each expression.
+        """
+
+        if (expr in self.var_asked):
+            # Expr has already been asked
+
+            if (expr not in self._vars.values()):
+                # Create var
+                identifier = m2_expr.ExprId("v%s" % self.var_indice.next(),
+                                    size = expr.size)
+                self._vars[identifier] = expr
+
+            # Recursion stop case
+            return
+        else:
+            # First time for @expr
+            self.var_asked.add(expr)
+
+        if isinstance(expr, m2_expr.ExprOp):
+            for a in expr.args:
+                self.find_variables_rec(a)
+
+        elif isinstance(expr, m2_expr.ExprInt):
+            pass
+
+        elif isinstance(expr, m2_expr.ExprId):
+            pass
+
+        elif isinstance(expr, m2_expr.ExprMem):
+            self.find_variables_rec(expr.arg)
+
+        elif isinstance(expr, m2_expr.ExprCompose):
+            for a in expr.args:
+                self.find_variables_rec(list(a)[0])
+
+        elif isinstance(expr, m2_expr.ExprSlice):
+            self.find_variables_rec(expr.arg)
+
+        elif isinstance(expr, m2_expr.ExprCond):
+            self.find_variables_rec(expr.cond)
+            self.find_variables_rec(expr.src1)
+            self.find_variables_rec(expr.src2)
+
+        else:
+            raise NotImplementedError("Type not handled: %s" % expr)
+
+    @property
+    def vars(self):
+        return self._vars_ordered
+
+    @property
+    def equation(self):
+        return self._equation
+
+    def __str__(self):
+        "Display variables and final equation"
+        out = ""
+        for var_id, var_expr in self.vars.iteritems():
+            out += "%s = %s\n" % (var_id, var_expr)
+        out += "Final: %s" % self.equation
+        return out
+
+
+class ExprRandom(object):
+    """Return an expression randomly generated"""
+
+    # Identifiers length
+    identifier_len = 5
+    # Identifiers' name charset
+    identifier_charset = string.letters
+    # Number max value
+    number_max = 0xFFFFFFFF
+    # Available operations
+    operations_by_args_number = {1: ["-"],
+                                 2: ["<<", "<<<", ">>", ">>>"],
+                                 "2+": ["+", "*", "&", "|", "^"],
+                                 }
+    # Maximum number of argument for operations
+    operations_max_args_number = 5
+    # If set, output expression is a perfect tree
+    perfect_tree = True
+    # Max argument size in slice, relative to slice size
+    slice_add_size = 10
+    # Maximum number of layer in compose
+    compose_max_layer = 5
+    # Maximum size of memory address in bits
+    memory_max_address_size = 32
+    # Re-use already generated elements to mimic a more realistic behavior
+    reuse_element = True
+    generated_elements = {} # (depth, size) -> [Expr]
+
+    @classmethod
+    def identifier(cls, size=32):
+        """Return a random identifier
+        @size: (optional) identifier size
+        """
+        return m2_expr.ExprId("".join([random.choice(cls.identifier_charset)
+                                       for _ in xrange(cls.identifier_len)]),
+                              size=size)
+
+    @classmethod
+    def number(cls, size=32):
+        """Return a random number
+        @size: (optional) number max bits
+        """
+        num = random.randint(0, cls.number_max % (2**size))
+        return m2_expr.ExprInt_fromsize(size, num)
+
+    @classmethod
+    def atomic(cls, size=32):
+        """Return an atomic Expression
+        @size: (optional) Expr size
+        """
+        available_funcs = [cls.identifier, cls.number]
+        return random.choice(available_funcs)(size=size)
+
+    @classmethod
+    def operation(cls, size=32, depth=1):
+        """Return an ExprOp
+        @size: (optional) Operation size
+        @depth: (optional) Expression depth
+        """
+        operand_type = random.choice(cls.operations_by_args_number.keys())
+        if isinstance(operand_type, str) and "+" in operand_type:
+            number_args = random.randint(int(operand_type[:-1]),
+                                         cls.operations_max_args_number)
+        else:
+            number_args = operand_type
+
+        args = [cls._gen(size=size, depth=depth - 1)
+                for _ in xrange(number_args)]
+        operand = random.choice(cls.operations_by_args_number[operand_type])
+        return m2_expr.ExprOp(operand,
+                              *args)
+
+    @classmethod
+    def slice(cls, size=32, depth=1):
+        """Return an ExprSlice
+        @size: (optional) Operation size
+        @depth: (optional) Expression depth
+        """
+        start = random.randint(0, size)
+        stop = start + size
+        return cls._gen(size=random.randint(stop, stop + cls.slice_add_size),
+                       depth=depth - 1)[start:stop]
+
+    @classmethod
+    def compose(cls, size=32, depth=1):
+        """Return an ExprCompose
+        @size: (optional) Operation size
+        @depth: (optional) Expression depth
+        """
+        # First layer
+        upper_bound = random.randint(1, size)
+        args = [(cls._gen(size=upper_bound, depth=depth - 1), 0, upper_bound)]
+
+        # Next layers
+        while (upper_bound < size):
+            if len(args) == (cls.compose_max_layer - 1):
+                # We reach the maximum size
+                upper_bound = size
+            else:
+                upper_bound = random.randint(args[-1][-1] + 1, size)
+
+            args.append((cls._gen(size=upper_bound - args[-1][-1]),
+                         args[-1][-1],
+                         upper_bound))
+
+        return m2_expr.ExprCompose(args)
+
+    @classmethod
+    def memory(cls, size=32, depth=1):
+        """Return an ExprMem
+        @size: (optional) Operation size
+        @depth: (optional) Expression depth
+        """
+
+        address_size = random.randint(1, cls.memory_max_address_size)
+        return m2_expr.ExprMem(cls._gen(size=address_size,
+                                       depth=depth - 1),
+                               size=size)
+
+    @classmethod
+    def _gen(cls, size=32, depth=1):
+        """Internal function for generating sub-expression according to options
+        @size: (optional) Operation size
+        @depth: (optional) Expression depth
+        /!\ @generated_elements is left modified
+        """
+        # Perfect tree handling
+        if not cls.perfect_tree:
+            depth = random.randint(max(0, depth - 2), depth)
+
+        # Element re-use
+        if cls.reuse_element and random.choice([True, False]) and \
+                (depth, size) in cls.generated_elements:
+            return random.choice(cls.generated_elements[(depth, size)])
+
+        # Recursion stop
+        if depth == 0:
+            return cls.atomic(size=size)
+
+        # Build a more complex expression
+        available_funcs = [cls.operation, cls.slice, cls.compose, cls.memory]
+        gen = random.choice(available_funcs)(size=size, depth=depth)
+
+        # Save it
+        new_value = cls.generated_elements.get((depth, size), []) + [gen]
+        cls.generated_elements[(depth, size)] = new_value
+        return gen
+
+    @classmethod
+    def get(cls, size=32, depth=1, clean=True):
+        """Return a randomly generated expression
+        @size: (optional) Operation size
+        @depth: (optional) Expression depth
+        @clean: (optional) Clean expression cache between two calls
+        """
+        # Init state
+        if clean:
+            cls.generated_elements = {}
+
+        # Get an element
+        got = cls._gen(size=size, depth=depth)
+
+        # Clear state
+        if clean:
+            cls.generated_elements = {}
+
+        return got
