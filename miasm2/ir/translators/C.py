@@ -50,7 +50,7 @@ class TranslatorC(Translator):
 
     @classmethod
     def from_ExprMem(cls, expr):
-        return "MEM_LOOKUP_%.2d(vm_mngr, %s)" % (expr._size,
+        return "MEM_LOOKUP_%.2d(vm_mngr, %s)" % (expr.size,
                                                  cls.from_expr(expr.arg))
 
     @classmethod
@@ -59,6 +59,10 @@ class TranslatorC(Translator):
             if expr.op == 'parity':
                 return "parity(%s&0x%x)" % (cls.from_expr(expr.args[0]),
                                             size2mask(expr.args[0].size))
+            elif expr.op in ['bsr', 'bsf']:
+                return "x86_%s(%s, 0x%x)" % (expr.op,
+                                             cls.from_expr(expr.args[0]),
+                                             expr.args[0].size)
             elif expr.op == '!':
                 return "(~ %s)&0x%x" % (cls.from_expr(expr.args[0]),
                                         size2mask(expr.args[0].size))
@@ -102,10 +106,6 @@ class TranslatorC(Translator):
                                                    cls.from_expr(expr.args[0]),
                                                    cls.from_expr(expr.args[1]),
                                                    size2mask(expr.args[0].size))
-            elif expr.op in ['bsr', 'bsf']:
-                return 'my_%s(%s, %s)' % (expr.op,
-                                          cls.from_expr(expr.args[0]),
-                                          cls.from_expr(expr.args[1]))
             elif (expr.op.startswith('cpuid') or
                   expr.op.startswith("fcom")  or
                   expr.op in ["fadd", "fsub", "fdiv", 'fmul', "fscale"]):

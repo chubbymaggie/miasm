@@ -51,10 +51,8 @@ class Machine(object):
             mn = arch.mn_armt
             from miasm2.arch.arm.ira import ir_a_armtb as ira
         elif machine_name == "sh4":
-            from miasm2.arch.sh4.disasm import dis_sha4 as dis_engine
             from miasm2.arch.sh4 import arch
             mn = arch.mn_sh4
-            from miasm2.arch.sh4.ira import ir_a_sh4 as ira
         elif machine_name == "x86_16":
             from miasm2.arch.x86.disasm import dis_x86_16 as dis_engine
             from miasm2.arch.x86 import arch, jit
@@ -108,6 +106,7 @@ class Machine(object):
         self.__gdbserver = gdbserver
         self.__log_jit = log_jit
         self.__log_arch = log_arch
+        self.__base_expr = arch.base_expr
 
     @property
     def dis_engine(self):
@@ -136,6 +135,10 @@ class Machine(object):
     @property
     def log_arch(self):
         return self.__log_arch
+
+    @property
+    def base_expr(self):
+        return self.__base_expr
 
     @classmethod
     def available_machine(cls):

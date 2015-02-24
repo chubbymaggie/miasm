@@ -77,7 +77,7 @@ class Debugguer(object):
 
     def init_memory_breakpoint(self):
         "Set exception handler on EXCEPT_BREAKPOINT_INTERN"
-        self.myjit.exception_handler
+        raise NotImplementedError("Not implemented")
 
     def add_memory_breakpoint(self, addr, size, read=False, write=False):
         "add mem bp @[addr, addr + size], on read/write/both"
@@ -446,20 +446,20 @@ class DebugCmd(cmd.Cmd, object):
     def help_dump(self):
         print "Dump <addr> [size]. Dump size bytes at addr."
 
-    def do_run(self, arg):
+    def do_run(self, _):
         self.dbg.run()
 
     def help_run(self):
         print "Launch or continue the current program"
 
-    def do_exit(self, s):
+    def do_exit(self, _):
         return True
 
-    def do_exec(self, l):
+    def do_exec(self, line):
         try:
-            print eval(l)
-        except Exception, e:
-            print "*** Error: %s" % e
+            print eval(line)
+        except Exception, error:
+            print "*** Error: %s" % error
 
     def help_exec(self):
         print "Exec a python command."

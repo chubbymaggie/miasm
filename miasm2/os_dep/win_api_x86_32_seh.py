@@ -19,11 +19,14 @@
 # 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301 USA.
 #
 import logging
-from elfesteem import pe_init
-from miasm2.jitter.csts import *
-from miasm2.core.utils import *
-import miasm2.arch.x86.regs as x86_regs
 import os
+import struct
+
+from elfesteem import pe_init
+
+from miasm2.jitter.csts import PAGE_READ, PAGE_WRITE
+from miasm2.core.utils import pck32, upck32
+import miasm2.arch.x86.regs as x86_regs
 
 # Constants Windows
 EXCEPTION_BREAKPOINT = 0x80000003
@@ -590,7 +593,7 @@ def build_fake_InLoadOrderModuleList(modules_name):
 all_seh_ad = dict([(x, None)
                   for x in xrange(FAKE_SEH_B_AD, FAKE_SEH_B_AD + 0x1000, 0x20)])
 # http://blog.fireeye.com/research/2010/08/download_exec_notes.html
-
+seh_count = 0
 
 def init_seh(myjit):
     global seh_count

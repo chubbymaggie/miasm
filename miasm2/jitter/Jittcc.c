@@ -73,17 +73,13 @@ PyObject* tcc_set_emul_lib_path(PyObject* self, PyObject* args)
 	char* include_arg;
 	char* lib_arg;
 
-	char* str1, * str2;
+	char* str1, * str2, * init_ptr;
 	if (!PyArg_ParseTuple(args, "ss",
 			      &include_arg,
 			      &lib_arg))
 		return NULL;
-	/*
-	if (include_array)
-		free(include_array);
-	*/
 
-	str2 = strdup(include_arg);
+	init_ptr = str2 = strdup(include_arg);
 	while (str2){
 		str1 = strsep(&str2, ";");
 		if (str1){
@@ -94,9 +90,10 @@ PyObject* tcc_set_emul_lib_path(PyObject* self, PyObject* args)
 			// fprintf(stderr, "adding include file: %s\n", str1);
 		}
 	}
+	if (init_ptr != NULL)
+		free(init_ptr);
 
-
-	str2 = strdup(lib_arg);
+	init_ptr = str2 = strdup(lib_arg);
 	while (str2){
 		str1 = strsep(&str2, ";");
 		if (str1){
@@ -107,6 +104,9 @@ PyObject* tcc_set_emul_lib_path(PyObject* self, PyObject* args)
 			// fprintf(stderr, "adding lib file: %s\n", str1);
 		}
 	}
+	if (init_ptr != NULL)
+		free(init_ptr);
+
 
 	/*
 	libcodenat_path = (char*)malloc(strlen(libcodenat_path_arg)+1);
@@ -168,7 +168,7 @@ PyObject* tcc_compil(PyObject* self, PyObject* args)
 		fprintf(stderr, "%s\n", func_code);
 		exit(1);
 	}
-	/* XXX use tinycc devel with -fPIC patch in makefile */
+	/* XXX configure tinycc install with --disable-static */
 	if (tcc_relocate(tcc_state, TCC_RELOCATE_AUTO) < 0) {
 		fprintf(stderr, "tcc relocate error\n");
 		exit(1);

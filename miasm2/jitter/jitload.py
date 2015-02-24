@@ -1,35 +1,69 @@
 #!/usr/bin/env python
 
-import os
-from miasm2.core import asmbloc
+import logging
+from functools import wraps
+from collections import Sequence, namedtuple
 
 from miasm2.jitter.csts import *
 from miasm2.core.utils import *
 from miasm2.core.bin_stream import bin_stream_vm
 from miasm2.ir.ir2C import init_arch_C
 
-import logging
-
-log = logging.getLogger('jitload.py')
 hnd = logging.StreamHandler()
 hnd.setFormatter(logging.Formatter("[%(levelname)s]: %(message)s"))
+log = logging.getLogger('jitload.py')
 log.addHandler(hnd)
 log.setLevel(logging.CRITICAL)
+log_func = logging.getLogger('jit function call')
+log_func.addHandler(hnd)
+log_func.setLevel(logging.CRITICAL)
 
 try:
-    from jitcore_tcc import JitCore_Tcc
+    from miasm2.jitter.jitcore_tcc import JitCore_Tcc
 except ImportError:
     log.error('cannot import jit tcc')
 
 try:
-    from jitcore_llvm import JitCore_LLVM
+    from miasm2.jitter.jitcore_llvm import JitCore_LLVM
 except ImportError:
     log.error('cannot import jit llvm')
 
 try:
-    from jitcore_python import JitCore_Python
+    from miasm2.jitter.jitcore_python import JitCore_Python
 except ImportError:
     log.error('cannot import jit python')
+
+def named_arguments(func):
+    """Function decorator to allow the use of .func_args_*() methods
+    with either the number of arguments or the list of the argument
+    names.
+
+    The wrapper is also used to log the argument values.
+
+    @func: function
+
+    """
+    @wraps(func)
+    def newfunc(self, args):
+        if isinstance(args, Sequence):
+            ret_ad, arg_vals = func(self, len(args))
+            arg_vals = namedtuple("args", args)(*arg_vals)
+            # func_name(arguments) return address
+            log_func.info('%s(%s) ret addr: %s' % (
+                whoami(),
+                ', '.join("%s=0x%x" % (field, value)
+                          for field, value in arg_vals._asdict().iteritems()),
+                hex(ret_ad)))
+            return ret_ad, namedtuple("args", args)(*arg_vals)
+        else:
+            ret_ad, arg_vals = func(self, args)
+            # func_name(arguments) return address
+            log_func.info('%s(%s) ret addr: %s' % (
+                whoami(),
+                ', '.join(hex(arg) for arg in arg_vals),
+                hex(ret_ad)))
+            return ret_ad, arg_vals
+    return newfunc
 
 
 class CallbackHandler(object):
@@ -40,8 +74,10 @@ class CallbackHandler(object):
         self.callbacks = {}  # Key -> [callback list]
 
     def add_callback(self, name, callback):
-        "Add a callback to the key 'name'"
-        self.callbacks[name] = self.callbacks.get(name, []) + [callback]
+        """Add a callback to the key @name, iff the @callback isn't already
+        assigned to it"""
+        if callback not in self.callbacks.get(name, []):
+            self.callbacks[name] = self.callbacks.get(name, []) + [callback]
 
     def set_callback(self, name, *args):
         "Set the list of callback for key 'name'"
@@ -141,13 +177,13 @@ class jitter:
         self.attrib = ir_arch.attrib
         arch_name = ir_arch.arch.name  # (ir_arch.arch.name, ir_arch.attrib)
         if arch_name == "x86":
-            from arch import JitCore_x86 as jcore
+            from miasm2.jitter.arch import JitCore_x86 as jcore
         elif arch_name == "arm":
-            from arch import JitCore_arm as jcore
+            from miasm2.jitter.arch import JitCore_arm as jcore
         elif arch_name == "msp430":
-            from arch import JitCore_msp430 as jcore
+            from miasm2.jitter.arch import JitCore_msp430 as jcore
         elif arch_name == "mips32":
-            from arch import JitCore_mips32 as jcore
+            from miasm2.jitter.arch import JitCore_mips32 as jcore
         else:
             raise ValueError("unsupported jit arch!")
 
@@ -351,3 +387,36 @@ class jitter:
         """Set an unicode string in memory"""
         s = "\x00".join(list(s)) + '\x00' * 3
         self.vm.set_mem(addr, s)
+
+    @staticmethod
+    def handle_lib(jitter):
+        """Resolve the name of the function which cause the handler call. Then
+        call the corresponding handler from users callback.
+        """
+        fname = jitter.libs.fad2cname[jitter.pc]
+        if fname in jitter.user_globals:
+            func = jitter.user_globals[fname]
+        else:
+            log.debug('%s' % repr(fname))
+            raise ValueError('unknown api', hex(jitter.pc), repr(fname))
+        func(jitter)
+        jitter.pc = getattr(jitter.cpu, jitter.ir_arch.pc.name)
+        return True
+
+    def handle_function(self, f_addr):
+        """Add a brakpoint which will trigger the function handler"""
+        self.add_breakpoint(f_addr, self.handle_lib)
+
+    def add_lib_handler(self, libs, user_globals=None):
+        """Add a function to handle libs call with breakpoints
+        @libs: libimp instance
+        @user_globals: dictionnary for defined user function
+        """
+        if user_globals is None:
+            user_globals = {}
+
+        self.libs = libs
+        self.user_globals = user_globals
+
+        for f_addr in libs.fad2cname:
+            self.handle_function(f_addr)

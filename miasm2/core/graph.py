@@ -1,4 +1,7 @@
-class DiGraph:
+from collections import defaultdict
+
+class DiGraph(object):
+    """Implementation of directed graph"""
 
     def __init__(self):
         self._nodes = set()
@@ -26,6 +29,17 @@ class DiGraph:
         self._nodes.add(n)
         self._nodes_to[n] = []
         self._nodes_from[n] = []
+
+    def del_node(self, node):
+        """Delete the @node of the graph; Also delete every edge to/from this
+        @node"""
+
+        if node in self._nodes:
+            self._nodes.remove(node)
+        for pred in self.predecessors(node):
+            self.del_edge(pred, node)
+        for succ in self.successors(node):
+            self.del_edge(node, succ)
 
     def add_edge(self, a, b):
         if not a in self._nodes:
@@ -73,6 +87,14 @@ class DiGraph:
     def leaves(self):
         return [x for x in self.leaves_iter()]
 
+    def heads_iter(self):
+        for node in self._nodes:
+            if len(self._nodes_from[node]) == 0:
+                yield node
+
+    def heads(self):
+        return [node for node in self.heads_iter()]
+
     def roots_iter(self):
         for n in self._nodes:
             if len(self._nodes_from[n]) == 0:
@@ -96,6 +118,20 @@ class DiGraph:
                 if path and path[0] == a:
                     out.append(path + [b])
         return out
+
+    def get_all_parents(self, node):
+        """Return every parents nodes for a given @node"""
+
+        todo = set([node])
+        done = set()
+        while todo:
+            node = todo.pop()
+            if node in done:
+                continue
+            done.add(node)
+            for parent in self.predecessors(node):
+                todo.add(parent)
+        return done
 
     def node2str(self, n):
         return str(n)
@@ -124,3 +160,44 @@ shape = "box"
                                                 self.edge2str(a, b))
         out += "}"
         return out
+
+
+
+    def compute_dominators(self):
+        """Compute dominators of the graph"""
+        nodes = self.nodes()
+        heads = self.heads()
+
+        dominators = defaultdict(set)
+        for node in self.nodes():
+            dominators[node].update(nodes)
+        for node in heads:
+            dominators[node] = set([node])
+
+        modified = True
+        todo = nodes.difference(heads)
+
+        while todo:
+            node = todo.pop()
+
+            # Heads state must not be changed
+            if node in heads:
+                continue
+
+            # Compute intersection of all predecessors'dominators
+            new_dom = None
+            for pred in self.predecessors(node):
+                if new_dom is None:
+                    new_dom = set(dominators[pred])
+                new_dom.intersection_update(dominators[pred])
+            if new_dom is None:
+                new_dom = set()
+            new_dom.update(set([node]))
+
+            # If intersection has changed, add sons to the todo list
+            if new_dom == dominators[node]:
+                continue
+            dominators[node] = new_dom
+            for succ in self.successors(node):
+                todo.add(succ)
+        return dict(dominators)

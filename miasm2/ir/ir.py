@@ -24,11 +24,10 @@ import miasm2.expression.expression as m2_expr
 from miasm2.expression.expression_helper import get_missing_interval
 from miasm2.core import asmbloc
 from miasm2.expression.simplifications import expr_simp
-from miasm2.core.graph import DiGraph
 from miasm2.core.asmbloc import asm_symbol_pool
 
 
-class irbloc:
+class irbloc(object):
 
     def __init__(self, label, irs, lines = []):
         assert(isinstance(label, asmbloc.asm_label))
@@ -52,7 +51,19 @@ class irbloc:
         self._dst = dst
         return dst
 
-    dst = property(get_dst)
+    def set_dst(self, value):
+        """Find and replace the IRDst affectation's source by @value"""
+        dst = None
+        for ir in self.irs:
+            for i, expr in enumerate(ir):
+                if isinstance(expr.dst, m2_expr.ExprId) and expr.dst.name == "IRDst":
+                    if dst is not None:
+                        raise ValueError('Multiple destinations!')
+                    dst = value
+                    ir[i] = m2_expr.ExprAff(expr.dst, value)
+        self._dst = value
+
+    dst = property(get_dst, set_dst)
 
     def get_rw(self):
         self.r = []
@@ -285,8 +296,7 @@ class ir(object):
         for b in self.blocs.values():
             for ir in b.irs:
                 for i, r in enumerate(ir):
-                    ir[i].src = expr_simp(r.src)
-                    ir[i].dst = expr_simp(r.dst)
+                    ir[i] = m2_expr.ExprAff(expr_simp(r.dst), expr_simp(r.src))
 
     def replace_expr_in_ir(self, bloc, rep):
         for irs in bloc.irs:

@@ -470,6 +470,37 @@ def muls(ir, instr, a, b, c = None):
         e.append(ExprAff(ir.IRDst, r))
     return e
 
+def umull(ir, instr, a, b, c, d):
+    e = []
+    r = c.zeroExtend(64) * d.zeroExtend(64)
+    e.append(ExprAff(a, r[0:32]))
+    e.append(ExprAff(b, r[32:64]))
+    # r15/IRDst not allowed as output
+    return e
+
+def umlal(ir, instr, a, b, c, d):
+    e = []
+    r = c.zeroExtend(64) * d.zeroExtend(64) + ExprCompose([(a, 0, 32), (b, 32, 64)])
+    e.append(ExprAff(a, r[0:32]))
+    e.append(ExprAff(b, r[32:64]))
+    # r15/IRDst not allowed as output
+    return e
+
+def smull(ir, instr, a, b, c, d):
+    e = []
+    r = c.signExtend(64) * d.signExtend(64)
+    e.append(ExprAff(a, r[0:32]))
+    e.append(ExprAff(b, r[32:64]))
+    # r15/IRDst not allowed as output
+    return e
+
+def smlal(ir, instr, a, b, c, d):
+    e = []
+    r = c.signExtend(64) * d.signExtend(64) + ExprCompose([(a, 0, 32), (b, 32, 64)])
+    e.append(ExprAff(a, r[0:32]))
+    e.append(ExprAff(b, r[32:64]))
+    # r15/IRDst not allowed as output
+    return e
 
 def b(ir, instr, a):
     e = []
@@ -871,6 +902,28 @@ def ubfx(ir, instr, a, b, c, d):
         e.append(ExprAff(ir.IRDst, r))
     return e
 
+def bfc(ir, instr, a, b, c):
+    e = []
+    start = int(b.arg)
+    stop = start + int(c.arg)
+    out = []
+    last = 0
+    if start:
+        out.append((a[:start], 0, start))
+        last = start
+    if stop - start:
+        out.append((ExprInt32(0)[last:stop], last, stop))
+        last = stop
+    if last < 32:
+        out.append((a[last:], last, 32))
+    r = ExprCompose(out)
+    e.append(ExprAff(a, r))
+    dst = None
+    if PC in a.get_r():
+        dst = PC
+        e.append(ExprAff(ir.IRDst, r))
+    return e
+
 
 
 COND_EQ = 0
@@ -990,6 +1043,10 @@ mnemo_condm0 = {'add': add,
                 'neg': neg,
 
                 'mul': mul,
+                'umull': umull,
+                'umlal': umlal,
+                'smull': smull,
+                'smlal': smlal,
                 'mla': mla,
                 'ldr': ldr,
                 'ldrd': ldrd,
@@ -1009,6 +1066,7 @@ mnemo_condm0 = {'add': add,
                 'sxtb': sxtb,
                 'sxth': sxth,
                 'ubfx': ubfx,
+                'bfc': bfc,
                 }
 
 mnemo_condm1 = {'adds': add,
@@ -1135,8 +1193,9 @@ class ir_arml(ir):
                     [(args[-1].args[0][1:], 0, 31), (cf, 31, 32)])
             elif (args[-1].op in ['<<', '>>', '<<a', 'a>>', '<<<', '>>>'] and
                   isinstance(args[-1].args[-1], ExprId)):
-                args[-1].args = args[-1].args[:-1] + (
-                    args[-1].args[-1][:8].zeroExtend(32),)
+                args[-1] = ExprOp(args[-1].op,
+                                  args[-1].args[0],
+                                  args[-1].args[-1][:8].zeroExtend(32))
         instr_ir, extra_ir = get_mnemo_expr(self, instr, *args)
         # if self.name.startswith('B'):
         #    return instr_ir, extra_ir

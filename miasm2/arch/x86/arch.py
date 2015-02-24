@@ -6,8 +6,8 @@ from miasm2.expression.expression import *
 from pyparsing import *
 from miasm2.core.cpu import *
 from collections import defaultdict
-import regs as regs_module
-from regs import *
+import miasm2.arch.x86.regs as regs_module
+from miasm2.arch.x86.regs import *
 from miasm2.ir.ir import *
 
 log = logging.getLogger("x86_arch")
@@ -16,6 +16,14 @@ console_handler.setFormatter(logging.Formatter("%(levelname)-5s: %(message)s"))
 log.addHandler(console_handler)
 log.setLevel(logging.WARN)
 
+conditional_branch = ["JO", "JNO", "JB", "JAE",
+                      "JZ", "JNZ", "JBE", "JA",
+                      "JS", "JNS", "JPE", "JNP",
+                      #"L", "NL", "NG", "G"]
+                      "JL", "JGE", "JLE", "JG",
+                      "JCXZ", "JECXZ", "JRCXZ"]
+
+unconditional_branch = ['JMP', 'JMPF']
 
 f_isad = "AD"
 f_s08 = "S08"
@@ -465,7 +473,7 @@ class instruction_x86(instruction):
         return self.additional_info.v_admode
 
     def dstflow(self):
-        if self.name.startswith('J'):
+        if self.name in conditional_branch + unconditional_branch:
             return True
         if self.name.startswith('LOOP'):
             return True
@@ -491,7 +499,7 @@ class instruction_x86(instruction):
             return
 
     def breakflow(self):
-        if self.name.startswith('J'):
+        if self.name in conditional_branch + unconditional_branch:
             return True
         if self.name.startswith('LOOP'):
             return True
@@ -507,10 +515,10 @@ class instruction_x86(instruction):
         return self.name in ['CALL', 'HLT', 'IRET', 'ICEBP']
 
     def splitflow(self):
-        if self.name.startswith('JMP'):
-            return False
-        if self.name.startswith('J'):
+        if self.name in conditional_branch:
             return True
+        if self.name in unconditional_branch:
+            return False
         if self.name.startswith('LOOP'):
             return True
         if self.name.startswith('INT'):
@@ -907,7 +915,6 @@ class mn_x86(cls_mn):
 
     def getnextflow(self, symbol_pool):
         raise NotImplementedError('not fully functional')
-        return self.offset + 4
 
     def ir_pre_instruction(self):
         return [ExprAff(mRIP[self.mode],
@@ -946,8 +953,8 @@ class mn_x86(cls_mn):
         for c, v in candidates:
             if v_opmode(c) != instr.mode:
                 cand_diff_mode += v
-        cand_same_mode.sort(key=lambda x: len(x))
-        cand_diff_mode.sort(key=lambda x: len(x))
+        cand_same_mode.sort(key=len)
+        cand_diff_mode.sort(key=len)
         return cand_same_mode + cand_diff_mode
 
 
@@ -2557,15 +2564,15 @@ class bs_cl1(bsi, m_arg):
 
 
 def sib_cond(cls, mode, v):
-        if admode_prefix((mode, v["opmode"], v["admode"])) == 16:
-            return None
-        if v['mod'] == 0b11:
-            return None
-        elif v['rm'] == 0b100:
-            return cls.ll
-        else:
-            return None
-        return v['rm'] == 0b100
+    if admode_prefix((mode, v["opmode"], v["admode"])) == 16:
+        return None
+    if v['mod'] == 0b11:
+        return None
+    elif v['rm'] == 0b100:
+        return cls.ll
+    else:
+        return None
+    return v['rm'] == 0b100
 
 
 class bs_cond_scale(bs_cond):
@@ -2581,7 +2588,7 @@ class bs_cond_scale(bs_cond):
             self.value = 0
             self.l = 0
             return True
-        return super(bs_cond, self).encode()
+        return super(bs_cond_scale, self).encode()
 
     def decode(self, v):
         self.value = v
@@ -3738,7 +3745,7 @@ addop("popad", [bs8(0x61), bs_opmode32])
 # popf_name = {16:'POPF', 32:'POPFD', 64:'POPFQ'}
 # bs_popf_name = bs_modname_size(l=0, name=popf_name)
 # addop("popf", [bs8(0x9d), bs_popf_name])
-addop("popf", [bs8(0x9d), bs_opmode16])
+addop("popfw", [bs8(0x9d), bs_opmode16])
 addop("popfd", [bs8(0x9d), bs_opmode32])
 addop("popfq", [bs8(0x9d), bs_opmode64])
 
@@ -3768,7 +3775,7 @@ addop("pushad", [bs8(0x60), bs_opmode32_no64])
 # pushf_name = {16:'PUSHF', 32:'PUSHFD', 64:'PUSHFQ'}
 # bs_pushf_name = bs_modname_size(l=0, name=pushf_name)
 # addop("pushf", [bs8(0x9c), bs_pushf_name])
-addop("pushf", [bs8(0x9c), bs_opmode16])
+addop("pushfw", [bs8(0x9c), bs_opmode16])
 addop("pushfd", [bs8(0x9c), bs_opmode32])
 addop("pushfq", [bs8(0x9c), bs_opmode64])
 

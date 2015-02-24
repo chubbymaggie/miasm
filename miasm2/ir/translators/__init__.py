@@ -1,6 +1,12 @@
 """IR Translators"""
-from miasm2.ir.translators.C import *
-from miasm2.ir.translators.python import *
-from miasm2.ir.translators.miasm import *
+from miasm2.ir.translators.translator import Translator
+import miasm2.ir.translators.C
+import miasm2.ir.translators.python
+import miasm2.ir.translators.miasm
+try:
+    import miasm2.ir.translators.z3_ir
+except ImportError:
+    # Nothing to do, z3 not available
+    pass
 
 __all__ = ["Translator"]

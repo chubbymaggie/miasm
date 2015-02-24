@@ -1,11 +1,11 @@
-import os, sys
 import logging
 from argparse import ArgumentParser
+
 from miasm2.analysis.machine import Machine
-from miasm2.os_dep import win_api_x86_32, win_api_x86_32_seh
+from miasm2.os_dep import win_api_x86_32_seh
 from miasm2.jitter.csts import PAGE_READ, PAGE_WRITE
 from miasm2.analysis import debugging
-from miasm2.jitter.loader.utils import libimp
+from miasm2.jitter.jitload import log_func
 
 class Sandbox(object):
     """
@@ -14,7 +14,6 @@ class Sandbox(object):
 
     @staticmethod
     def code_sentinelle(jitter):
-        print 'Emulation stop'
         jitter.run = False
         return False
 
@@ -57,7 +56,7 @@ class Sandbox(object):
             self.jitter.jit.log_regs = True
 
         if not self.options.quiet_function_calls:
-            self.machine.log_jit.setLevel(logging.DEBUG)
+            log_func.setLevel(logging.INFO)
 
         if self.options.dumpblocs:
             self.jitter.jit.log_newbloc = True
@@ -117,9 +116,8 @@ class Sandbox(object):
                 cmd.cmdloop()
 
         else:
-            print "Start emulation", hex(addr)
             self.jitter.init_run(addr)
-            print self.jitter.continue_run()
+            self.jitter.continue_run()
 
 
 class OS(object):
@@ -160,8 +158,11 @@ class OS_Win(OS):
 
     def __init__(self, custom_methods, *args, **kwargs):
         from miasm2.jitter.loader.pe import vm_load_pe, vm_load_pe_libs, preload_pe, libimp_pe
+        from miasm2.os_dep import win_api_x86_32
+        methods = win_api_x86_32.__dict__
+        methods.update(custom_methods)
 
-        super(OS_Win, self).__init__(custom_methods, *args, **kwargs)
+        super(OS_Win, self).__init__(methods, *args, **kwargs)
 
         # Import manager
         libs = libimp_pe()
@@ -187,7 +188,7 @@ class OS_Win(OS):
         preload_pe(self.jitter.vm, self.pe, libs)
 
         # Library calls handler
-        self.jitter.add_lib_handler(libs, custom_methods)
+        self.jitter.add_lib_handler(libs, methods)
 
         # Manage SEH
         if self.options.use_seh:
@@ -217,8 +218,11 @@ class OS_Linux(OS):
 
     def __init__(self, custom_methods, *args, **kwargs):
         from miasm2.jitter.loader.elf import vm_load_elf, preload_elf, libimp_elf
+        from miasm2.os_dep import linux_stdlib
+        methods = linux_stdlib.__dict__
+        methods.update(custom_methods)
 
-        super(OS_Linux, self).__init__(custom_methods, *args, **kwargs)
+        super(OS_Linux, self).__init__(methods, *args, **kwargs)
 
         # Import manager
         self.libs = libimp_elf()
@@ -230,12 +234,16 @@ class OS_Linux(OS):
         self.entry_point = self.elf.Ehdr.entry
 
         # Library calls handler
-        self.jitter.add_lib_handler(self.libs, custom_methods)
+        self.jitter.add_lib_handler(self.libs, methods)
 
 class OS_Linux_str(OS):
     def __init__(self, custom_methods, *args, **kwargs):
         from miasm2.jitter.loader.elf import libimp_elf
-        super(OS_Linux_str, self).__init__(custom_methods, *args, **kwargs)
+        from miasm2.os_dep import linux_stdlib
+        methods = linux_stdlib.__dict__
+        methods.update(custom_methods)
+
+        super(OS_Linux_str, self).__init__(methods, *args, **kwargs)
 
         # Import manager
         libs = libimp_elf()
@@ -246,20 +254,19 @@ class OS_Linux_str(OS):
         self.jitter.vm.add_memory_page(self.options.load_base_addr, PAGE_READ | PAGE_WRITE, data)
 
         # Library calls handler
-        self.jitter.add_lib_handler(libs, custom_methods)
+        self.jitter.add_lib_handler(libs, methods)
 
     @classmethod
     def update_parser(cls, parser):
         parser.add_argument("load_base_addr", help="load base address")
 
 
-
-class Arch_x86_32(Arch):
-    _ARCH_ = "x86_32"
+class Arch_x86(Arch):
+    _ARCH_ = None # Arch name
     STACK_SIZE = 0x100000
 
     def __init__(self):
-        super(Arch_x86_32, self).__init__()
+        super(Arch_x86, self).__init__()
 
         if self.options.usesegm:
             self.jitter.ir_arch.do_stk_segm=  True
@@ -275,7 +282,15 @@ class Arch_x86_32(Arch):
     @classmethod
     def update_parser(cls, parser):
         parser.add_argument('-s', "--usesegm", action="store_true",
-                          help="Use segments fs:")
+                          help="Use segments")
+
+
+class Arch_x86_32(Arch_x86):
+    _ARCH_ = "x86_32"
+
+
+class Arch_x86_64(Arch_x86):
+    _ARCH_ = "x86_64"
 
 
 class Arch_arml(Arch):
@@ -324,6 +339,31 @@ class Sandbox_Win_x86_32(Sandbox, Arch_x86_32, OS_Win):
         if addr is None and self.options.address is None:
             addr = self.entry_point
         super(Sandbox_Win_x86_32, self).run(addr)
+
+
+class Sandbox_Win_x86_64(Sandbox, Arch_x86_64, OS_Win):
+
+    def __init__(self, *args, **kwargs):
+        Sandbox.__init__(self, *args, **kwargs)
+
+        # reserve stack for local reg
+        for i in xrange(0x4):
+            self.jitter.push_uint64_t(0)
+
+        # Pre-stack some arguments
+        self.jitter.push_uint64_t(0x1337beef)
+
+        # Set the runtime guard
+        self.jitter.add_breakpoint(0x1337beef, self.__class__.code_sentinelle)
+
+
+    def run(self, addr = None):
+        """
+        If addr is not set, use entrypoint
+        """
+        if addr is None and self.options.address is None:
+            addr = self.entry_point
+        super(Sandbox_Win_x86_64, self).run(addr)
 
 
 class Sandbox_Linux_x86_32(Sandbox, Arch_x86_32, OS_Linux):

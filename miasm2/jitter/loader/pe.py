@@ -164,8 +164,9 @@ def vm_load_pe(vm, fdata, align_s=True, load_hdr=True, **kargs):
         # Update min and max addresses
         if min_addr is None or section.addr < min_addr:
             min_addr = section.addr
-        if max_addr is None or section.addr + section.size > max_addr:
-            max_addr = section.addr + max(section.size, len(section.data))
+        max_section_len = max(section.size, len(section.data))
+        if max_addr is None or section.addr + max_section_len > max_addr:
+            max_addr = section.addr + max_section_len
 
     min_addr = pe.rva2virt(min_addr)
     max_addr = pe.rva2virt(max_addr)
@@ -179,8 +180,8 @@ def vm_load_pe(vm, fdata, align_s=True, load_hdr=True, **kargs):
 
     # Copy each sections content in memory
     for section in pe.SHList:
-        log.debug('Map 0x%x bytes to 0x%x' % (len(s.data), pe.rva2virt(s.addr)))
-        vm.set_mem(pe.rva2virt(s.addr), str(s.data))
+        log.debug('Map 0x%x bytes to 0x%x' % (len(section.data), pe.rva2virt(section.addr)))
+        vm.set_mem(pe.rva2virt(section.addr), str(section.data))
 
     return pe
 
@@ -265,7 +266,7 @@ def vm2pe(myjit, fname, libs=None, e_orig=None,
                 libbase, dllname = libs.fad2info[funcaddr]
                 libs.lib_get_add_func(libbase, dllname, addr)
 
-        new_dll = libs.gen_new_lib(mye, lambda x: mye.virt.is_addr_in(x))
+        new_dll = libs.gen_new_lib(mye, mye.virt.is_addr_in)
     else:
         new_dll = {}
 
@@ -353,10 +354,10 @@ class libimp_pe(libimp):
                 self.fad2cname[ad] = c_name
                 self.fad2info[ad] = libad, imp_ord_or_name
 
-    def gen_new_lib(self, target_pe, filter=lambda _: True):
+    def gen_new_lib(self, target_pe, flt=lambda _: True):
         """Gen a new DirImport description
         @target_pe: PE instance
-        @filter: (boolean f(address)) restrict addresses to keep
+        @flt: (boolean f(address)) restrict addresses to keep
         """
 
         new_lib = []
@@ -368,8 +369,8 @@ class libimp_pe(libimp):
             for func_name, dst_addresses in self.lib_imp2dstad[ad].items():
                 out_ads.update({addr:func_name for addr in dst_addresses})
 
-            # Filter available addresses according to @filter
-            all_ads = [addr for addr in out_ads.keys() if filter(addr)]
+            # Filter available addresses according to @flt
+            all_ads = [addr for addr in out_ads.keys() if flt(addr)]
             log.debug('ads: %s' % map(hex, all_ads))
             if not all_ads:
                 continue
