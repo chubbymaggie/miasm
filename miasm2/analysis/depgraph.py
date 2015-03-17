@@ -1,5 +1,6 @@
 """Provide dependency graph"""
 import itertools
+
 import miasm2.expression.expression as m2_expr
 from miasm2.core.graph import DiGraph
 from miasm2.core.asmbloc import asm_label
@@ -274,6 +275,8 @@ class DependencyDict(object):
         # Map
         while todo:
             node = todo.pop()
+            if node in used_nodes:
+                continue
             used_nodes.add(node)
             if not node in self._cache:
                 continue
@@ -343,7 +346,7 @@ class DependencyResult(object):
     def input(self):
         return self._input_depnodes
 
-    def emul(self):
+    def emul(self, step=False):
         """Symbolic execution of relevant nodes according to the history
         Return the values of input nodes' elements
 
@@ -351,13 +354,13 @@ class DependencyResult(object):
         """
         # Init
         new_ira = (self._ira.__class__)()
-        lines = self.relevant_nodes
+        depnodes = self.relevant_nodes
         affects = []
 
         # Build a single affectation block according to history
         for label in self.relevant_labels[::-1]:
-            affected_lines = [line.line_nb for line in lines
-                              if line.label == label]
+            affected_lines = set(depnode.line_nb for depnode in depnodes
+                                 if depnode.label == label)
             irs = self._ira.blocs[label].irs
             for line_nb in sorted(affected_lines):
                 affects.append(irs[line_nb])
@@ -365,7 +368,7 @@ class DependencyResult(object):
         # Eval the block
         temp_label = asm_label("Temp")
         sb = symbexec(new_ira, new_ira.arch.regs.regs_init)
-        sb.emulbloc(irbloc(temp_label, affects))
+        sb.emulbloc(irbloc(temp_label, affects), step=step)
 
         # Return only inputs values (others could be wrongs)
         return {depnode.element: sb.symbols[depnode.element]
@@ -492,7 +495,7 @@ class DependencyGraph(object):
         current_depdict.pending.update(depnodes)
 
         # Init the work list
-        done = []
+        done = {}
         todo = [current_depdict]
 
         while todo:
@@ -501,18 +504,26 @@ class DependencyGraph(object):
             # Update the dependencydict until fixed point is reached
             self._updateDependencyDict(depdict)
 
+            # Clean irrelevant path
+            depdict.filter_used_nodes(depnodes)
+
             # Avoid infinite loops
-            if depdict in done:
+            label = depdict.label
+            if depdict in done.get(label, []):
                 continue
-            done.append(depdict)
+            done.setdefault(label, []).append(depdict)
 
             # No more dependencies
             if len(depdict.pending) == 0:
-                yield depdict
+                yield depdict.copy()
                 continue
+
+            # Has a predecessor ?
+            is_final = True
 
             # Propagate the DependencyDict to all parents
             for label, irb_len in self._get_previousblocks(depdict.label):
+                is_final = False
 
                 ## Duplicate the DependencyDict
                 new_depdict = depdict.extend(label)
@@ -529,8 +540,9 @@ class DependencyGraph(object):
                 ## Manage the new element
                 todo.append(new_depdict)
 
-            # Return the node if it's a final one, ie. it's a head
-            if depdict.label in heads:
+            # Return the node if it's a final one, ie. it's a head (in graph
+            # or defined by caller)
+            if is_final or depdict.label in heads:
                 yield depdict.copy()
 
     def get(self, label, elements, line_nb, heads):

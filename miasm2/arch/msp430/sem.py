@@ -176,6 +176,21 @@ def sub_w(ir, instr, a, b):
     return e, []
 
 
+def add_b(ir, instr, a, b):
+    e, a, b = mng_autoinc(a, b, 8)
+    if isinstance(b, ExprMem):
+        b = ExprMem(b.arg, 8)
+    else:
+        b = b[:8]
+    a = a[:8]
+    c = b + a
+    e.append(ExprAff(b, c))
+    e += update_flag_zn_r(c)
+    e += update_flag_add_cf(a, b, c)
+    e += update_flag_add_of(a, b, c)
+    return e, []
+
+
 def add_w(ir, instr, a, b):
     e, a, b = mng_autoinc(a, b, 16)
     c = b + a
@@ -244,8 +259,8 @@ def cmp_w(ir, instr, a, b):
     e, a, b = mng_autoinc(a, b, 16)
     c = b - a
     e += update_flag_zn_r(c)
-    e += update_flag_sub_cf(a, b, c)
-    e += update_flag_sub_of(a, b, c)
+    e += update_flag_sub_cf(b, a, c)
+    e += update_flag_sub_of(b, a, c)
     return e, []
 
 
@@ -253,8 +268,8 @@ def cmp_b(ir, instr, a, b):
     e, a, b = mng_autoinc(a, b, 8)
     c = b[:8] - a[:8]
     e += update_flag_zn_r(c)
-    e += update_flag_sub_cf(a[:8], b[:8], c)
-    e += update_flag_sub_of(a[:8], b[:8], c)
+    e += update_flag_sub_cf(b[:8], a[:8], c)
+    e += update_flag_sub_of(b[:8], a[:8], c)
     return e, []
 
 
@@ -369,6 +384,7 @@ mnemo_func = {
     "bis.w": bis_w,
     "bit.w": bit_w,
     "sub.w": sub_w,
+    "add.b": add_b,
     "add.w": add_w,
     "push.w": push_w,
     "dadd.w": dadd_w,
@@ -437,7 +453,7 @@ class ir_msp430(ir):
             if x.dst != SR:
                 continue
             xx = ComposeExprAff(composed_sr, x.src)
-            instr_ir[i] = xx
+            instr_ir[i:i+1] = xx
         for i, x in enumerate(instr_ir):
             x = ExprAff(x.dst, x.src.replace_expr(
                 {self.pc: ExprInt16(instr.offset + instr.l)}))

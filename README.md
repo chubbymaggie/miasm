@@ -13,6 +13,7 @@ Reverse engineering framework in Python
 - [Obtaining Miasm](#user-content-obtaining-miasm)
 	- [Software requirements](#user-content-software-requirements)
 	- [Configuration](#user-content-configuration)
+	- [Windows & IDA](#user-content-windows--ida)
 - [Testing](#user-content-testing)
 - [They already use Miasm](#user-content-they-already-use-miasm)
 - [Misc](#user-content-misc)
@@ -458,7 +459,7 @@ sudo python setup.py install
 * To use the jitter, TCC or LLVM is recommended
 * LibTCC needs to be configured with the `--disable-static` option
   * remove `libtcc-dev` from the system to avoid conflicts
-  * clone [TinyCC](http://repo.or.cz/tinycc.git)
+  * clone [TinyCC](http://repo.or.cz/tinycc.git) and use [latest stable version](http://repo.or.cz/w/tinycc.git/tags)
   * `./configure --disable-static && make && make install`
 * LLVM
   * Debian (testing/unstable): install python-llvm
@@ -474,6 +475,16 @@ $ sudo python setup.py install
 If something goes wrong during one of the jitter modules compilation, Miasm will
 skip the error and disable the corresponding module (see the compilation
 output).
+
+Windows & IDA
+-------------
+
+Most of Miasm's IDA plugins use a subset of Miasm functionnality.
+A quick way to have them working is to add:
+* `elfesteem` directory and `pyparsing.py` to `C:\...\IDA\python\` or `pip install pyparsing elfesteem`
+* `miasm2/miasm2` directory to `C:\...\IDA\python\` 
+
+All features excepting JITter related ones will be available. For a more complete installation, please refer to above paragraphs.
 
 Testing
 =======

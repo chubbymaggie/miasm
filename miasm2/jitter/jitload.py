@@ -33,6 +33,12 @@ try:
 except ImportError:
     log.error('cannot import jit python')
 
+try:
+    from miasm2.jitter import VmMngr
+except ImportError:
+    log.error('cannot import VmMngr')
+
+
 def named_arguments(func):
     """Function decorator to allow the use of .func_args_*() methods
     with either the number of arguments or the list of the argument
@@ -187,8 +193,9 @@ class jitter:
         else:
             raise ValueError("unsupported jit arch!")
 
+        self.vm = VmMngr.Vm()
         self.cpu = jcore.JitCpu()
-        self.vm = jcore.VmMngr()
+
         self.bs = bin_stream_vm(self.vm)
         self.ir_arch = ir_arch
         init_arch_C(self.arch)

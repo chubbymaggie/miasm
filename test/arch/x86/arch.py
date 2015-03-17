@@ -1115,10 +1115,10 @@ reg_tests = [
      "9d"),
     (m32, "00000000    POPFD",
      "9d"),
-    (m64, "00000000    POPFD",
-     "9d"),
     (m64, "00000000    POPFQ",
-     "489d"),
+     "9d"),
+    (m64, "00000000    POPFW",
+     "669d"),
 
     (m32, "00000000    PREFETCH0  BYTE PTR [EAX]",
      "0f1808"),
@@ -1183,10 +1183,10 @@ reg_tests = [
      "9c"),
     (m32, "00000000    PUSHFD",
      "9c"),
-    (m64, "00000000    PUSHFD",
-     "9c"),
     (m64, "00000000    PUSHFQ",
-     "489c"),
+     "9c"),
+    (m64, "00000000    PUSHFW",
+     "669c"),
 
     (m32, "00000000    RCL        BYTE PTR [EAX], 0x1",
      "D010"),
@@ -1511,6 +1511,11 @@ reg_tests = [
      "0f35"),
     (m64, "00000000    SYSRET",
      "0f07"),
+
+    (m32, "00000000    STMXCSR    DWORD PTR [EAX]",
+     "0fAE18"),
+    (m32, "00000000    LDMXCSR    DWORD PTR [EAX]",
+     "0fAE10"),
 
 
 
@@ -1933,3 +1938,8 @@ import cProfile
 # cProfile.run(r'mn_x86.dis("\x81\x54\x18\xfe\x44\x33\x22\x11", m32)')
 cProfile.run('profile_dis(o)')
 # profile_dis(o)
+
+# Test instruction representation with prefix
+instr_bytes = '\x65\xc7\x00\x09\x00\x00\x00'
+inst = mn_x86.dis(instr_bytes, 32, 0)
+assert(inst.b == instr_bytes)
