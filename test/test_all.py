@@ -138,8 +138,9 @@ testset += RegressionTest(["depgraph.py"], base_dir="analysis",
                                     "graph_test_09_00.dot",
                                     "graph_test_09_01.dot",
                                     "graph_test_10_00.dot",
+                                    "graph_test_11_00.dot",
                                     ] + ["graph_%02d.dot" % test_nb
-                                         for test_nb in xrange(1, 11)])
+                                         for test_nb in xrange(1, 12)])
 
 # Examples
 class Example(Test):
@@ -236,6 +237,8 @@ for script, prods in [(["single_instr.py"], []),
                       (["function.py"], ["graph.txt"]),
                       (["file.py", Example.get_sample("box_upx.exe"),
                         "0x410f90"], ["graph.txt"]),
+                      (["full.py", Example.get_sample("box_upx.exe")],
+                       ["graph_execflow.txt", "lines.txt"]),
                       ]:
     testset += ExampleDisassembler(script, products=prods)
 
@@ -249,7 +252,7 @@ class ExampleDisasmFull(ExampleDisassembler):
 
     def __init__(self, *args, **kwargs):
         super(ExampleDisasmFull, self).__init__(*args, **kwargs)
-        self.command_line = ["full.py", "-g", "-s"] + self.command_line
+        self.command_line = ["full.py", "-g", "-s", "-m"] + self.command_line
         self.products += ["graph_execflow.txt", "graph_irflow.txt", "lines.txt"]
 
 
@@ -369,6 +372,8 @@ if __name__ == "__main__":
     parser.add_argument("-t", "--ommit-tags", help="Ommit tests based on tags \
 (tag1,tag2). Available tags are %s. \
 By default, no tag is ommited." % ", ".join(TAGS.keys()), default="")
+    parser.add_argument("-n", "--do-not-clean",
+                        help="Do not clean tests products", action="store_true")
     args = parser.parse_args()
 
     ## Parse multiproc argument
@@ -468,6 +473,9 @@ By default, no tag is ommited." % ", ".join(TAGS.keys()), default="")
 
     # Run tests
     testset.run()
+
+    # Finalize
+    testset.end(clean=not args.do_not_clean)
 
     # Exit with an error if at least a test failed
     exit(testset.tests_passed())

@@ -3,6 +3,8 @@ from collections import defaultdict
 
 from elfesteem import cstruct
 from elfesteem import *
+import elfesteem.elf as elf_csts
+
 from miasm2.jitter.csts import *
 from miasm2.jitter.loader.utils import canon_libname_libfunc, libimp
 from miasm2.core.interval import interval
@@ -38,8 +40,7 @@ def preload_elf(vm, e, runtime_lib, patch_vm_imp=True):
             libname_s = canon_libname_libfunc(libname, libfunc)
             dyn_funcs[libname_s] = ad_libfunc
             if patch_vm_imp:
-                log.debug('patch %s %s %s' %
-                          (hex(ad), hex(ad_libfunc), libfunc))
+                log.debug('patch 0x%x 0x%x %s', ad, ad_libfunc, libfunc)
                 vm.set_mem(
                     ad, struct.pack(cstruct.size2type[e.size], ad_libfunc))
     return runtime_lib, dyn_funcs
@@ -58,8 +59,8 @@ def vm_load_elf(vm, fdata, **kargs):
     for p in e.ph.phlist:
         if p.ph.type != 1:
             continue
-        log.debug('%s %s %s %s' %
-                  (hex(p.ph.vaddr), hex(p.ph.memsz), hex(p.ph.offset), hex(p.ph.filesz)))
+        log.debug('0x%x 0x%x 0x%x 0x%x', p.ph.vaddr, p.ph.memsz, p.ph.offset,
+                  p.ph.filesz)
         data_o = e._content[p.ph.offset:p.ph.offset + p.ph.filesz]
         addr_o = p.ph.vaddr
         a_addr = addr_o & ~0xFFF
@@ -80,3 +81,19 @@ def vm_load_elf(vm, fdata, **kargs):
 
 class libimp_elf(libimp):
     pass
+
+
+# machine, size, sex -> arch_name
+ELF_machine = {(elf_csts.EM_ARM, 32, elf_csts.ELFDATA2LSB): "arml",
+               (elf_csts.EM_ARM, 32, elf_csts.ELFDATA2MSB): "armb",
+               (elf_csts.EM_MIPS, 32, elf_csts.ELFDATA2MSB): "mips32b",
+               (elf_csts.EM_MIPS, 32, elf_csts.ELFDATA2LSB): "mips32l",
+               (elf_csts.EM_386, 32, elf_csts.ELFDATA2LSB): "x86_32",
+               (elf_csts.EM_X86_64, 64, elf_csts.ELFDATA2LSB): "x86_64",
+               (elf_csts.EM_SH, 32, elf_csts.ELFDATA2LSB): "sh4",
+               }
+
+def guess_arch(elf):
+    """Return the architecture specified by the ELF container @elf.
+    If unknown, return None"""
+    return ELF_machine.get((elf.Ehdr.machine, elf.size, elf.sex), None)
