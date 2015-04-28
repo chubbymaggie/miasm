@@ -127,20 +127,13 @@ typedef struct {
 
 PyObject* tcc_exec_bloc(PyObject* self, PyObject* args)
 {
-	void (*func)(block_id*, void*, void*);
-	uint64_t vm;
-	uint64_t cpu;
-	PyObject* ret;
+	void (*func)(block_id*, PyObject*);
+	PyObject* jitcpu;
 	block_id BlockDst = {0, 0};
 
-	if (!PyArg_ParseTuple(args, "KKK", &func, &cpu, &vm))
+	if (!PyArg_ParseTuple(args, "KO", &func, &jitcpu))
 		return NULL;
-	func(&BlockDst, (void*)cpu, (void*)vm);
-	ret = PyTuple_New(2);
-	if (ret == NULL) {
-		fprintf(stderr, "Erreur alloc!\n");
-		exit(1);
-	}
+	func(&BlockDst, jitcpu);
 
 	if (BlockDst.is_local == 1) {
 		fprintf(stderr, "return on local label!\n");

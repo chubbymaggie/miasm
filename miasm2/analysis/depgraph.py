@@ -2,12 +2,18 @@
 import itertools
 from collections import namedtuple
 
+try:
+    import z3
+except ImportError:
+    pass
+
 import miasm2.expression.expression as m2_expr
 from miasm2.core.graph import DiGraph
-from miasm2.core.asmbloc import asm_label
+from miasm2.core.asmbloc import asm_label, expr_is_label
 from miasm2.expression.simplifications import expr_simp
 from miasm2.ir.symbexec import symbexec
 from miasm2.ir.ir import irbloc
+from miasm2.ir.translators import Translator
 
 class DependencyNode(object):
     """Node elements of a DependencyGraph
@@ -346,13 +352,18 @@ class DependencyResult(object):
     def input(self):
         return self._input_depnodes
 
-    def emul(self, step=False):
+    def emul(self, ctx=None, step=False):
         """Symbolic execution of relevant nodes according to the history
         Return the values of input nodes' elements
+        @ctx: (optional) Initial context as dictionnary
+        @step: (optional) Verbose execution
 
         /!\ The emulation is not safe if there is a loop in the relevant labels
         """
         # Init
+        ctx_init = self._ira.arch.regs.regs_init
+        if ctx is not None:
+            ctx_init.update(ctx)
         depnodes = self.relevant_nodes
         affects = []
 
@@ -366,7 +377,7 @@ class DependencyResult(object):
 
         # Eval the block
         temp_label = asm_label("Temp")
-        sb = symbexec(self._ira, self._ira.arch.regs.regs_init)
+        sb = symbexec(self._ira, ctx_init)
         sb.emulbloc(irbloc(temp_label, affects), step=step)
 
         # Return only inputs values (others could be wrongs)
@@ -374,7 +385,96 @@ class DependencyResult(object):
                 for depnode in self.input}
 
 
-FollowExpr = namedtuple("FollowExpr", ["follow", "element"])
+class DependencyResultImplicit(DependencyResult):
+    """Stand for a result of a DependencyGraph with implicit option
+
+    Provide path constraints using the z3 solver"""
+
+    # Z3 Solver instance
+    _solver = None
+
+    def emul(self, ctx=None, step=False):
+        # Init
+        ctx_init = self._ira.arch.regs.regs_init
+        if ctx is not None:
+            ctx_init.update(ctx)
+        depnodes = self.relevant_nodes
+        solver = z3.Solver()
+        sb = symbexec(self._ira, ctx_init)
+        temp_label = asm_label("Temp")
+        history = self.relevant_labels[::-1]
+        history_size = len(history)
+
+        for hist_nb, label in enumerate(history):
+            # Build block with relevant lines only
+            affected_lines = set(depnode.line_nb for depnode in depnodes
+                                 if depnode.label == label)
+            irs = self._ira.blocs[label].irs
+            affects = []
+
+            for line_nb in sorted(affected_lines):
+                affects.append(irs[line_nb])
+
+            # Emul the block and get back destination
+            dst = sb.emulbloc(irbloc(temp_label, affects), step=step)
+
+            # Add constraint
+            if hist_nb + 1 < history_size:
+                next_label = history[hist_nb + 1]
+                expected = sb.eval_expr(m2_expr.ExprId(next_label, 32))
+                constraint = m2_expr.ExprAff(dst, expected)
+                solver.add(Translator.to_language("z3").from_expr(constraint))
+
+        # Save the solver
+        self._solver = solver
+
+        # Return only inputs values (others could be wrongs)
+        return {depnode.element: sb.symbols[depnode.element]
+                for depnode in self.input}
+
+    @property
+    def is_satisfiable(self):
+        """Return True iff the solution path admits at least one solution
+        PRE: 'emul'
+        """
+        return self._solver.check().r > 0
+
+    @property
+    def constraints(self):
+        """If satisfiable, return a valid solution as a Z3 Model instance"""
+        if not self.is_satisfiable:
+            raise ValueError("Unsatisfiable")
+        return self._solver.model()
+
+
+class FollowExpr(object):
+    "Stand for an element (expression, depnode, ...) to follow or not"
+
+    def __init__(self, follow, element):
+        self.follow = follow
+        self.element = element
+
+    @staticmethod
+    def to_depnodes(follow_exprs, label, line, modifier):
+        """Build a set of FollowExpr(DependencyNode) from the @follow_exprs set
+        of FollowExpr"""
+        dependencies = set()
+        for follow_expr in follow_exprs:
+            dependencies.add(FollowExpr(follow_expr.follow,
+                                        DependencyNode(label,
+                                                       follow_expr.element,
+                                                       line,
+                                                       modifier=modifier)))
+        return dependencies
+
+    @staticmethod
+    def extract_depnodes(follow_exprs, only_follow=False):
+        """Extract depnodes from a set of FollowExpr(Depnodes)
+        @only_follow: (optional) extract only elements to follow"""
+        return set(follow_expr.element
+                   for follow_expr in follow_exprs
+                   if not(only_follow) or follow_expr.follow)
+
 
 class DependencyGraph(object):
     """Implementation of a dependency graph
@@ -382,15 +482,16 @@ class DependencyGraph(object):
     A dependency graph contains DependencyNode as nodes. The oriented edges
     stand for a dependency.
     The dependency graph is made of the lines of a group of IRblock
-    *explicitely* involved in the equation of given element.
+    *explicitely* or *implicitely* involved in the equation of given element.
     """
 
-    def __init__(self, ira, apply_simp=True, follow_mem=True,
+    def __init__(self, ira, implicit=False, apply_simp=True, follow_mem=True,
                  follow_call=True):
         """Create a DependencyGraph linked to @ira
         The IRA graph must have been computed
 
         @ira: IRAnalysis instance
+        @implicit: (optional) Imply implicit dependencies
 
         Following arguments define filters used to generate dependencies
         @apply_simp: (optional) Apply expr_simp
@@ -399,6 +500,7 @@ class DependencyGraph(object):
         """
         # Init
         self._ira = ira
+        self._implicit = implicit
 
         # The IRA graph must be computed
         assert(hasattr(self._ira, 'g'))
@@ -413,6 +515,7 @@ class DependencyGraph(object):
             self._cb_follow.append(self._follow_nomem)
         if not follow_call:
             self._cb_follow.append(self._follow_nocall)
+        self._cb_follow.append(self._follow_label)
 
     @staticmethod
     def _follow_simp_expr(exprs):
@@ -423,6 +526,18 @@ class DependencyGraph(object):
         for expr in exprs:
             follow.add(expr_simp(expr))
         return follow, set()
+
+    @staticmethod
+    def _follow_label(exprs):
+        """Do not follow labels"""
+        follow = set()
+        unfollow = set()
+        for expr in exprs:
+            if expr_is_label(expr):
+                unfollow.add(expr)
+            else:
+                follow.add(expr)
+        return follow, unfollow
 
     @staticmethod
     def _follow_mem_wrapper(exprs, mem_read):
@@ -505,14 +620,8 @@ class DependencyGraph(object):
                 read = set([FollowExpr(True, depnode.element)])
 
             ## Build output
-            dependencies = set()
-            for follow_expr in read:
-                dependencies.add(FollowExpr(follow_expr.follow,
-                                            DependencyNode(depnode.label,
-                                                           follow_expr.element,
-                                                           depnode.line_nb - 1,
-                                                           modifier=modifier)))
-            output = dependencies
+            output = FollowExpr.to_depnodes(read, depnode.label,
+                                            depnode.line_nb - 1, modifier)
 
         return output
 
@@ -539,13 +648,11 @@ class DependencyGraph(object):
 
             # Find dependency of the current depnode
             sub_depnodes = self._resolve_depNode(depnode)
-            depdict.cache[depnode] = set(follow_expr.element
-                                         for follow_expr in sub_depnodes)
+            depdict.cache[depnode] = FollowExpr.extract_depnodes(sub_depnodes)
 
             # Add to the worklist its dependencies
-            todo.update(set(follow_expr.element
-                            for follow_expr in sub_depnodes
-                            if follow_expr.follow))
+            todo.update(FollowExpr.extract_depnodes(sub_depnodes,
+                                                    only_follow=True))
 
         # Pending states will be override in cache
         for depnode in depdict.pending:
@@ -604,6 +711,12 @@ class DependencyGraph(object):
                 ## Duplicate the DependencyDict
                 new_depdict = depdict.extend(label)
 
+                if self._implicit:
+                    ### Implicit dependencies: IRDst will be link with heads
+                    implicit_depnode = DependencyNode(label, self._ira.IRDst,
+                                                      irb_len, modifier=False)
+                    new_depdict.pending.add(implicit_depnode)
+
                 ## Create links between DependencyDict
                 for depnode_head in depdict.pending:
                     ### Follow the head element in the parent
@@ -612,6 +725,11 @@ class DependencyGraph(object):
                     ### The new node has to be computed in _updateDependencyDict
                     new_depdict.cache[depnode_head] = set([new_depnode])
                     new_depdict.pending.add(new_depnode)
+
+                    ### Handle implicit dependencies
+                    if self._implicit:
+                        new_depdict.cache[depnode_head].add(implicit_depnode)
+
 
                 ## Manage the new element
                 todo.append(new_depdict)
@@ -642,6 +760,7 @@ class DependencyGraph(object):
 
         # Unify solutions
         unified = []
+        cls_res = DependencyResultImplicit if self._implicit else DependencyResult
         for final_depdict in depdicts:
             ## Keep only relevant nodes
             final_depdict.clean_modifiers_in_cache()
@@ -651,7 +770,7 @@ class DependencyGraph(object):
             if final_depdict not in unified:
                 unified.append(final_depdict)
                 ### Return solutions as DiGraph
-                yield DependencyResult(self._ira, final_depdict, input_depnodes)
+                yield cls_res(self._ira, final_depdict, input_depnodes)
 
     def get_fromDepNodes(self, depnodes, heads):
         """Alias for the get() method. Use the attributes of @depnodes as

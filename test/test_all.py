@@ -101,6 +101,7 @@ for script in ["interval.py",
                "graph.py",
                "parse_asm.py",
                "utils.py",
+               "sembuilder.py",
                ]:
     testset += RegressionTest([script], base_dir="core")
 ## Expression
@@ -127,7 +128,6 @@ for script in ["win_api_x86_32.py",
 testset += RegressionTest(["depgraph.py"], base_dir="analysis",
                           products=["graph_test_01_00.dot",
                                     "graph_test_02_00.dot",
-                                    "graph_test_02_01.dot",
                                     "graph_test_03_00.dot",
                                     "graph_test_03_01.dot",
                                     "graph_test_04_00.dot",
@@ -195,7 +195,7 @@ class ExampleShellcode(ExampleAssembler):
 testset += ExampleShellcode(['x86_32', 'x86_32_manip_ptr.S', "demo_x86_32.bin"])
 
 test_box = {}
-test_box_names = ["mod", "mod_self", "repmod", "simple", "enc", "pop_esp"]
+test_box_names = ["mod", "mod_self", "repmod", "simple", "enc", "pop_esp", "automod"]
 for source in test_box_names:
     sample_base = "x86_32_" + source
     args = ["x86_32", sample_base + ".S", sample_base + ".bin", "--PE"]
@@ -321,6 +321,15 @@ class ExampleSymbolExec(Example):
 
 
 testset += ExampleSymbolExec(["single_instr.py"])
+for options, nb_sol, tag in [([], 8, []),
+                             (["-i", "--rename-args"], 12, [TAGS["z3"]])]:
+    testset += ExampleSymbolExec(["depgraph.py",
+                                  Example.get_sample("simple_test.bin"),
+                                  "-m", "x86_32", "0x0", "0x8b",
+                                  "eax"] + options,
+                                 products=["sol_%d.dot" % nb
+                                           for nb in xrange(nb_sol)],
+                                 tags=tag)
 
 ## Jitter
 class ExampleJitter(Example):
