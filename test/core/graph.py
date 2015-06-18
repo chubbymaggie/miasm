@@ -40,6 +40,13 @@ assert(dominators == {1: set([1]),
                       5: set([1, 2, 5]),
                       6: set([1, 2, 6])})
 
+assert(list(g1.walk_dominators(1, dominators)) == [])
+assert(list(g1.walk_dominators(2, dominators)) == [1])
+assert(list(g1.walk_dominators(3, dominators)) == [2, 1])
+assert(list(g1.walk_dominators(4, dominators)) == [2, 1])
+assert(list(g1.walk_dominators(5, dominators)) == [2, 1])
+assert(list(g1.walk_dominators(6, dominators)) == [2, 1])
+
 # Regression test with multiple heads
 g2 = DiGraph()
 g2.add_edge(1, 2)
@@ -47,13 +54,30 @@ g2.add_edge(2, 3)
 g2.add_edge(3, 4)
 g2.add_edge(5, 6)
 g2.add_edge(6, 3)
+g2.add_edge(4, 7)
+g2.add_edge(4, 8)
+g2.add_edge(7, 9)
+g2.add_edge(8, 9)
 
 dominators = g2.compute_dominators(5)
 assert(dominators == {3: set([3, 5, 6]),
                       4: set([3, 4, 5, 6]),
                       5: set([5]),
-                      6: set([5, 6])})
+                      6: set([5, 6]),
+                      7: set([3, 4, 5, 6, 7]),
+                      8: set([3, 4, 5, 6, 8]),
+                      9: set([3, 4, 5, 6, 9])})
 
+
+assert(list(g2.walk_dominators(1, dominators)) == [])
+assert(list(g2.walk_dominators(2, dominators)) == [])
+assert(list(g2.walk_dominators(3, dominators)) == [6, 5])
+assert(list(g2.walk_dominators(4, dominators)) == [3, 6, 5])
+assert(list(g2.walk_dominators(5, dominators)) == [])
+assert(list(g2.walk_dominators(6, dominators)) == [5])
+assert(list(g2.walk_dominators(7, dominators)) == [4, 3, 6, 5])
+assert(list(g2.walk_dominators(8, dominators)) == [4, 3, 6, 5])
+assert(list(g2.walk_dominators(9, dominators)) == [4, 3, 6, 5])
 
 postdominators = g1.compute_postdominators(6)
 assert(postdominators == {1: set([1, 2, 6]),
@@ -63,12 +87,27 @@ assert(postdominators == {1: set([1, 2, 6]),
                           5: set([2, 5, 6]),
                           6: set([6])})
 
+assert(list(g1.walk_postdominators(1, postdominators)) == [2, 6])
+assert(list(g1.walk_postdominators(2, postdominators)) == [6])
+assert(list(g1.walk_postdominators(3, postdominators)) == [5, 2, 6])
+assert(list(g1.walk_postdominators(4, postdominators)) == [5, 2, 6])
+assert(list(g1.walk_postdominators(5, postdominators)) == [2, 6])
+assert(list(g1.walk_postdominators(6, postdominators)) == [])
+
+
 postdominators = g1.compute_postdominators(5)
 assert(postdominators == {1: set([1, 2, 5]),
                           2: set([2, 5]),
                           3: set([3, 5]),
                           4: set([4, 5]),
                           5: set([5])})
+
+assert(list(g1.walk_postdominators(1, postdominators)) == [2, 5])
+assert(list(g1.walk_postdominators(2, postdominators)) == [5])
+assert(list(g1.walk_postdominators(3, postdominators)) == [5])
+assert(list(g1.walk_postdominators(4, postdominators)) == [5])
+assert(list(g1.walk_postdominators(5, postdominators)) == [])
+assert(list(g1.walk_postdominators(6, postdominators)) == [])
 
 postdominators = g2.compute_postdominators(4)
 assert(postdominators == {1: set([1, 2, 3, 4]),
@@ -77,3 +116,51 @@ assert(postdominators == {1: set([1, 2, 3, 4]),
                           4: set([4]),
                           5: set([3, 4, 5, 6]),
                           6: set([3, 4, 6])})
+
+assert(list(g2.walk_postdominators(1, postdominators)) == [2, 3, 4])
+assert(list(g2.walk_postdominators(2, postdominators)) == [3, 4])
+assert(list(g2.walk_postdominators(3, postdominators)) == [4])
+assert(list(g2.walk_postdominators(4, postdominators)) == [])
+assert(list(g2.walk_postdominators(5, postdominators)) == [6, 3, 4])
+assert(list(g2.walk_postdominators(6, postdominators)) == [3, 4])
+assert(list(g2.walk_postdominators(7, postdominators)) == [])
+assert(list(g2.walk_postdominators(8, postdominators)) == [])
+assert(list(g2.walk_postdominators(9, postdominators)) == [])
+
+
+idoms = g1.compute_immediate_dominators(1)
+assert(idoms == {2: 1,
+                 3: 2,
+                 4: 2,
+                 5: 2,
+                 6: 2})
+
+idoms = g2.compute_immediate_dominators(1)
+assert(idoms == {2: 1,
+                 3: 2,
+                 4: 3,
+                 7: 4,
+                 8: 4,
+                 9: 4})
+
+idoms = g2.compute_immediate_dominators(5)
+assert(idoms == {3: 6,
+                 4: 3,
+                 6: 5,
+                 7: 4,
+                 8: 4,
+                 9: 4})
+
+frontier = g1.compute_dominance_frontier(1)
+assert(frontier == {2: set([2]),
+                    3: set([5]),
+                    4: set([5]),
+                    5: set([2])})
+
+frontier = g2.compute_dominance_frontier(1)
+assert(frontier == {7: set([9]),
+                    8: set([9])})
+
+frontier = g2.compute_dominance_frontier(5)
+assert(frontier == {7: set([9]),
+                    8: set([9])})

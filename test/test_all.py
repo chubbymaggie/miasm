@@ -1,6 +1,7 @@
 import argparse
 import time
 import os
+import tempfile
 
 from utils.test import Test
 from utils.testset import TestSet
@@ -117,6 +118,11 @@ for script in ["ir2C.py",
                "symbexec.py",
                ]:
     testset += RegressionTest([script], base_dir="ir")
+testset += RegressionTest(["analysis.py"], base_dir="ir",
+                          products=[fname for fnames in (
+            ["simp_graph_%02d.dot" % test_nb, "graph_%02d.dot" % test_nb]
+            for test_nb in xrange(1, 18))
+                                    for fname in fnames])
 testset += RegressionTest(["z3_ir.py"], base_dir="ir/translators",
                           tags=[TAGS["z3"]])
 ## OS_DEP
@@ -237,7 +243,7 @@ class ExampleDisassembler(Example):
 for script, prods in [(["single_instr.py"], []),
                       (["function.py"], ["graph.txt"]),
                       (["file.py", Example.get_sample("box_upx.exe"),
-                        "0x410f90"], ["graph.txt"]),
+                        "0x407570"], ["graph.txt"]),
                       (["full.py", Example.get_sample("box_upx.exe")],
                        ["graph_execflow.txt", "lines.txt"]),
                       ]:
@@ -289,10 +295,11 @@ class ExampleExpression(Example):
     example_dir = "expression"
 
 
-testset += ExampleExpression(["graph_dataflow.py",
-                              Example.get_sample("sc_connect_back.bin"),
-                              "0x2e"],
-                             products=["data.txt"])
+for args in [[], ["--symb"]]:
+    testset += ExampleExpression(["graph_dataflow.py",
+                                  Example.get_sample("sc_connect_back.bin"),
+                                  "0x2e"] + args,
+                                 products=["data.txt"])
 testset += ExampleExpression(["asm_to_ir.py"],
                              products=["graph.txt", "graph2.txt"])
 testset += ExampleExpression(["get_read_write.py"],
