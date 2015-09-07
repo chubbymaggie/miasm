@@ -205,9 +205,62 @@ unsigned int umul16_hi(unsigned short a, unsigned short b);
 unsigned int div_op(unsigned int size, unsigned int a, unsigned int b, unsigned int c);
 unsigned int rem_op(unsigned int size, unsigned int a, unsigned int b, unsigned int c);
 uint64_t rot_left(uint64_t size, uint64_t a, uint64_t b);
-unsigned int rot_right(unsigned int size, unsigned int a, unsigned int b);
+uint64_t rot_right(uint64_t size, uint64_t a, uint64_t b);
 int rcl_rez_op(unsigned int size, unsigned int a, unsigned int b, unsigned int cf);
 int rcl_cf_op(unsigned int size, unsigned int a, unsigned int b, unsigned int cf);
+
+
+#define UDIV(sizeA)						\
+    uint ## sizeA ## _t udiv ## sizeA (vm_cpu_t* vmcpu, uint ## sizeA ## _t a, uint ## sizeA ## _t b) \
+	    {								\
+	    uint ## sizeA ## _t r;						\
+	    if (b == 0) {						\
+		    vmcpu->exception_flags |= EXCEPT_INT_DIV_BY_ZERO;	\
+		    return 0;						\
+	    }								\
+	    r = a/b;							\
+	    return r;							\
+	    }
+
+
+#define UMOD(sizeA)						\
+    uint ## sizeA ## _t umod ## sizeA (vm_cpu_t* vmcpu, uint ## sizeA ## _t a, uint ## sizeA ## _t b) \
+	    {								\
+	    uint ## sizeA ## _t r;						\
+	    if (b == 0) {						\
+		    vmcpu->exception_flags |= EXCEPT_INT_DIV_BY_ZERO;	\
+		    return 0;						\
+	    }								\
+	    r = a%b;							\
+	    return r;							\
+	    }
+
+
+#define IDIV(sizeA)						\
+    int ## sizeA ## _t idiv ## sizeA (vm_cpu_t* vmcpu, int ## sizeA ## _t a, int ## sizeA ## _t b) \
+	    {								\
+	    int ## sizeA ## _t r;						\
+	    if (b == 0) {						\
+		    vmcpu->exception_flags |= EXCEPT_INT_DIV_BY_ZERO;	\
+		    return 0;						\
+	    }								\
+	    r = a/b;							\
+	    return r;							\
+	    }
+
+
+#define IMOD(sizeA)						\
+    int ## sizeA ## _t imod ## sizeA (vm_cpu_t* vmcpu, int ## sizeA ## _t a, int ## sizeA ## _t b) \
+	    {								\
+	    int ## sizeA ## _t r;						\
+	    if (b == 0) {						\
+		    vmcpu->exception_flags |= EXCEPT_INT_DIV_BY_ZERO;	\
+		    return 0;						\
+	    }								\
+	    r = a%b;							\
+	    return r;							\
+	    }
+
 
 //PyObject* _vm_push_uint32_t(PyObject *item);
 //PyObject* _vm_pop_uint32_t(void);
@@ -248,7 +301,7 @@ void add_memory_page(vm_mngr_t* vm_mngr, struct memory_page_node* mpn);
 void check_write_code_bloc(vm_mngr_t* vm_mngr, uint64_t my_size, uint64_t addr);
 
 
-void dump_memory_page_pool(vm_mngr_t* vm_mngr);
+char* dump(vm_mngr_t* vm_mngr);
 void dump_memory_breakpoint_pool(vm_mngr_t* vm_mngr);
 //PyObject* _vm_get_all_memory(void);
 PyObject* addr2BlocObj(vm_mngr_t* vm_mngr, uint64_t addr);

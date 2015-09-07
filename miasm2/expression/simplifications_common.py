@@ -427,7 +427,7 @@ def simp_slice(e_s, e):
                 continue
             # arg is fully included in slice
             elif e.start <= s_start and s_stop <= e.stop:
-                out.append((arg, s_start, s_stop))
+                out.append((arg, s_start - e.start, s_stop - e.start))
                 continue
             # arg is truncated at start
             if e.start > s_start:
@@ -476,6 +476,21 @@ def simp_slice(e_s, e):
         e.arg.op == "*" and isinstance(e.arg.args[-1], ExprInt)):
         args = [e_s.expr_simp_wrapper(a[e.start:e.stop]) for a in e.arg.args]
         e = ExprOp(e.arg.op, *args)
+
+    # (a >> int)[x:y] => a[x+int:y+int] with int+y <= a.size
+    # (a << int)[x:y] => a[x-int:y-int] with x-int >= 0
+    elif (isinstance(e.arg, ExprOp) and e.arg.op in [">>", "<<"] and
+          isinstance(e.arg.args[1], ExprInt)):
+        arg, shift = e.arg.args
+        shift = int(shift.arg)
+        if e.arg.op == ">>":
+            if shift + e.stop <= arg.size:
+                return arg[e.start + shift:e.stop + shift]
+        elif e.arg.op == "<<":
+            if e.start - shift >= 0:
+                return arg[e.start - shift:e.stop - shift]
+        else:
+            raise ValueError('Bad case')
 
     return e
 

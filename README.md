@@ -1,4 +1,5 @@
 [![Build Status](https://travis-ci.org/cea-sec/miasm.svg)](https://travis-ci.org/cea-sec/miasm)
+[![Code Climate](https://codeclimate.com/github/cea-sec/miasm/badges/gpa.svg)](https://codeclimate.com/github/cea-sec/miasm)
 
 Reverse engineering framework in Python
 
@@ -249,7 +250,7 @@ RIP 0000000040000013
 Interacting with the jitter:
 
 ```
->>> jitter.vm.dump_memory_page_pool()
+>>> jitter.vm
 ad 1230000 size 10000 RW_ hpad 0x2854b40
 ad 40000000 size 16 RW_ hpad 0x25e0ed0
 
@@ -448,15 +449,15 @@ Miasm uses:
 * or LLVM v3.2 with python-llvm, see below
 * python-pyparsing
 * python-dev
-* elfesteem from [Elfesteem](http://code.google.com/p/elfesteem/)
+* elfesteem from [Elfesteem](https://github.com/serpilliere/elfesteem.git)
 
 Configuration
 -------------
 
 * Install elfesteem
 ```
-hg clone https://code.google.com/p/elfesteem/
-cd elfesteem_directory
+git clone https://github.com/serpilliere/elfesteem.git elfesteem
+cd elfesteem
 python setup.py build
 sudo python setup.py install
 ```

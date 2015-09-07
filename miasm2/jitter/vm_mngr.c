@@ -132,7 +132,6 @@ struct memory_page_node * get_memory_page_from_address(vm_mngr_t* vm_mngr, uint6
 		return mpn;
 
 	fprintf(stderr, "WARNING: address 0x%"PRIX64" is not mapped in virtual memory:\n", ad);
-	//dump_memory_page_pool();
 	//dump_gpregs();
 	//exit(-1);
 	vm_mngr->exception_flags |= EXCEPT_ACCESS_VIOL;
@@ -146,7 +145,6 @@ struct memory_page_node * get_memory_page_from_address(vm_mngr_t* vm_mngr, uint6
 			return mpn;
 	}
 	fprintf(stderr, "WARNING: address 0x%"PRIX64" is not mapped in virtual memory:\n", ad);
-	//dump_memory_page_pool();
 	//dump_gpregs();
 	//exit(-1);
 	vm_mngr->exception_flags |= EXCEPT_ACCESS_VIOL;
@@ -214,7 +212,6 @@ static uint64_t memory_page_read(vm_mngr_t* vm_mngr, unsigned int my_size, uint6
 		unsigned int new_size = my_size;
 		int index = 0;
 		//fprintf(stderr, "read multiple page! %"PRIX64" %d\n", ad, new_size);
-		//dump_memory_page_pool(vm_mngr);
 		while (new_size){
 			mpn = get_memory_page_from_address(vm_mngr, ad);
 			if (!mpn)
@@ -299,7 +296,6 @@ static void memory_page_write(vm_mngr_t* vm_mngr, unsigned int my_size,
 	/* write is multiple page wide */
 	else{
 		//fprintf(stderr, "write multiple page! %"PRIX64" %d\n", ad, my_size);
-		//dump_memory_page_pool(vm_mngr);
 		switch(my_size){
 
 		case 8:
@@ -825,11 +821,11 @@ uint64_t rot_left(uint64_t size, uint64_t a, uint64_t b)
     }
 }
 
-unsigned int rot_right(unsigned int size, unsigned int a, unsigned int b)
+uint64_t rot_right(uint64_t size, uint64_t a, uint64_t b)
 {
-    unsigned int tmp;
+    uint64_t tmp;
 
-    b = b&0x1F;
+    b = b&0x3F;
     b %= size;
     switch(size){
 	    case 8:
@@ -841,8 +837,11 @@ unsigned int rot_right(unsigned int size, unsigned int a, unsigned int b)
 	    case 32:
 		    tmp = ((a&0xFFFFFFFF) >> b) | (a << (size-b));
 		    return tmp&0xffffffff;
+	    case 64:
+		    tmp = ((a&0xFFFFFFFFFFFFFFFF) >> b) | (a << (size-b));
+		    return tmp&0xFFFFFFFFFFFFFFFF;
 	    default:
-		    fprintf(stderr, "inv size in rotleft %d\n", size);
+		    fprintf(stderr, "inv size in rotright %"PRIX64"\n", size);
 		    exit(0);
     }
 }
@@ -1488,20 +1487,43 @@ void add_memory_page(vm_mngr_t* vm_mngr, struct memory_page_node* mpn_a)
 
 }
 
-void dump_memory_page_pool(vm_mngr_t* vm_mngr)
+/*
+   Return a char* representing the repr of vm_mngr_t object
+*/
+char* dump(vm_mngr_t* vm_mngr)
 {
+	char buf[100];
+	int length;
+	int total_len = 0;
+	char *buf_final;
 	struct memory_page_node * mpn;
 
-	LIST_FOREACH(mpn, &vm_mngr->memory_page_pool, next){
-		printf("ad %"PRIX64" size %"PRIX64" %c%c%c hpad %p\n",
-		       mpn->ad,
-		       mpn->size,
-		       mpn->access & PAGE_READ? 'R':'_',
-		       mpn->access & PAGE_WRITE? 'W':'_',
-		       mpn->access & PAGE_EXEC? 'X':'_',
-		       mpn->ad_hp
-		       );
+	buf_final = malloc(1);
+	if (buf_final == NULL) {
+		printf("cannot alloc\n");
+		exit(0);
 	}
+	buf_final[0] = '\x00';
+	LIST_FOREACH(mpn, &vm_mngr->memory_page_pool, next){
+
+		length = snprintf(buf, sizeof(buf),
+				  "ad 0x%"PRIX64" size 0x%"PRIX64" %c%c%c\n",
+				  (uint64_t)mpn->ad,
+				  (uint64_t)mpn->size,
+				  mpn->access & PAGE_READ? 'R':'_',
+				  mpn->access & PAGE_WRITE? 'W':'_',
+				  mpn->access & PAGE_EXEC? 'X':'_'
+				  );
+		total_len += length+1;
+		buf_final = realloc(buf_final, total_len);
+		if (buf_final == NULL) {
+			printf("cannot alloc\n");
+			exit(0);
+		}
+		strcat(buf_final, buf);
+	}
+
+	return buf_final;
 }
 
 void dump_memory_breakpoint_pool(vm_mngr_t* vm_mngr)
@@ -1680,3 +1702,5 @@ uint64_t get_exception_flag(vm_mngr_t* vm_mngr)
 {
 	return vm_mngr->exception_flags;
 }
+
+

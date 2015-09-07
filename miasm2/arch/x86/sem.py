@@ -20,6 +20,7 @@ import miasm2.expression.expression as m2_expr
 from miasm2.expression.simplifications import expr_simp
 from miasm2.arch.x86.regs import *
 from miasm2.arch.x86.arch import mn_x86, repeat_mn, replace_regs
+from miasm2.expression.expression_helper import expr_cmps, expr_cmpu
 from miasm2.ir.ir import ir, irbloc
 import math
 import struct
@@ -620,54 +621,56 @@ def dec(ir, instr, a):
     return e, []
 
 
-def push(ir, instr, a):
+def push_gen(ir, instr, a, size):
     e = []
-    s = instr.mode
-    size = instr.v_opmode()
-    opmode, admode = s, instr.v_admode()
-    # special case segment regs
-    if a in [ES, CS, SS, DS, FS, GS]:
-        off = admode
-    else:
-        off = a.size
-    if not s in [16, 32, 64]:
+    if not size in [16, 32, 64]:
         raise ValueError('bad size stacker!')
-    if isinstance(a, m2_expr.ExprInt):
-        a = m2_expr.ExprInt_fromsize(s, a.arg)
+    if a.size < size:
+        a = a.zeroExtend(size)
+    elif a.size == size:
+        pass
+    else:
+        raise ValueError('strange arg size')
 
-    c = mRSP[instr.mode][:s] - m2_expr.ExprInt_fromsize(s, off / 8)
-    e.append(m2_expr.ExprAff(mRSP[instr.mode][:s], c))
-    # we sub vopmode to stack, but mem access is arg size wide
+    sp = mRSP[instr.mode]
+    new_sp = sp - m2_expr.ExprInt_from(sp, size / 8)
+    e.append(m2_expr.ExprAff(sp, new_sp))
     if ir.do_stk_segm:
-        c = m2_expr.ExprOp('segm', SS, c)
-    e.append(m2_expr.ExprAff(m2_expr.ExprMem(c, a.size), a))
+        new_sp = m2_expr.ExprOp('segm', SS, new_sp)
+    e.append(m2_expr.ExprAff(m2_expr.ExprMem(new_sp, size), a))
     return e, []
 
+def push(ir, instr, a):
+    return push_gen(ir, instr, a, instr.mode)
 
-def pop(ir, instr, a):
+def pushw(ir, instr, a):
+    return push_gen(ir, instr, a, 16)
+
+
+def pop_gen(ir, instr, a, size):
     e = []
-    s = instr.mode
-    size = instr.v_opmode()
-    opmode, admode = s, instr.v_admode()
-    # special case segment regs
-    if a in [ES, CS, SS, DS, FS, GS]:
-        off = admode
-    else:
-        off = a.size
-    if not s in [16, 32, 64]:
+    if not size in [16, 32, 64]:
         raise ValueError('bad size stacker!')
-    new_esp = mRSP[instr.mode][:s] + m2_expr.ExprInt_fromsize(s, off / 8)
+
+    sp = mRSP[instr.mode]
+    new_sp = sp + m2_expr.ExprInt_from(sp, size / 8)
     # don't generate ESP incrementation on POP ESP
     if a != ir.sp:
-        e.append(m2_expr.ExprAff(mRSP[instr.mode][:s], new_esp))
+        e.append(m2_expr.ExprAff(sp, new_sp))
     # XXX FIX XXX for pop [esp]
     if isinstance(a, m2_expr.ExprMem):
-        a = a.replace_expr({mRSP[instr.mode]: new_esp})
-    c = mRSP[instr.mode][:s]
+        a = a.replace_expr({sp: new_sp})
+    c = sp
     if ir.do_stk_segm:
         c = m2_expr.ExprOp('segm', SS, c)
     e.append(m2_expr.ExprAff(a, m2_expr.ExprMem(c, a.size)))
     return e, []
+
+def pop(ir, instr, a):
+    return pop_gen(ir, instr, a, instr.mode)
+
+def popw(ir, instr, a):
+    return pop_gen(ir, instr, a, 16)
 
 
 def sete(ir, instr, a):
@@ -944,7 +947,7 @@ def pushfd(ir, instr):
 
 
 def pushfw(ir, instr):
-    return push(ir, instr, compose_eflag(16))
+    return pushw(ir, instr, compose_eflag(16))
 
 
 def popfd(ir, instr):
@@ -1210,7 +1213,9 @@ def jz(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(zf, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(zf,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e = [m2_expr.ExprAff(meip, dst_o),
          m2_expr.ExprAff(ir.IRDst, dst_o),
      ]
@@ -1222,7 +1227,8 @@ def jcxz(ir, instr, dst):
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
     dst_o = m2_expr.ExprCond(mRCX[instr.mode][:16],
-                             n, dst).zeroExtend(instr.mode)
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1233,7 +1239,8 @@ def jecxz(ir, instr, dst):
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
     dst_o = m2_expr.ExprCond(mRCX[instr.mode][:32],
-                             n, dst).zeroExtend(instr.mode)
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1243,7 +1250,9 @@ def jrcxz(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(mRCX[instr.mode], n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(mRCX[instr.mode],
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1253,7 +1262,9 @@ def jnz(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(zf, n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(zf,
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1263,7 +1274,9 @@ def jp(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(pf, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(pf,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1273,7 +1286,9 @@ def jnp(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(pf, n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(pf,
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1283,7 +1298,9 @@ def ja(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(cf | zf, n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(cf | zf,
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1293,7 +1310,9 @@ def jae(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(cf, n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(cf,
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1303,7 +1322,9 @@ def jb(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(cf, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(cf,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1313,7 +1334,9 @@ def jbe(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(cf | zf, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(cf | zf,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1323,7 +1346,9 @@ def jge(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(nf - of, n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(nf - of,
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1333,7 +1358,9 @@ def jg(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(zf | (nf - of), n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(zf | (nf - of),
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1343,7 +1370,9 @@ def jl(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(nf - of, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(nf - of,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1353,7 +1382,9 @@ def jle(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(zf | (nf - of), dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(zf | (nf - of),
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1363,7 +1394,9 @@ def js(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(nf, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(nf,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1373,7 +1406,9 @@ def jns(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(nf, n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(nf,
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1383,7 +1418,9 @@ def jo(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(of, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(of,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1393,7 +1430,9 @@ def jno(ir, instr, dst):
     e = []
     meip = mRIP[instr.mode]
     n = m2_expr.ExprId(ir.get_next_label(instr), dst.size)
-    dst_o = m2_expr.ExprCond(of, n, dst).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(of,
+                             n.zeroExtend(instr.mode),
+                             dst.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1408,7 +1447,9 @@ def loop(ir, instr, dst):
 
     n = m2_expr.ExprId(ir.get_next_label(instr), instr.mode)
     c = myecx - m2_expr.ExprInt_from(myecx, 1)
-    dst_o = m2_expr.ExprCond(c, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(c,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(myecx, c))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
@@ -1430,7 +1471,9 @@ def loopne(ir, instr, dst):
     c &= zf ^ m2_expr.ExprInt1(1)
 
     e.append(m2_expr.ExprAff(myecx, myecx - m2_expr.ExprInt_from(myecx, 1)))
-    dst_o = m2_expr.ExprCond(c, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(c,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -1449,7 +1492,9 @@ def loope(ir, instr, dst):
                  m2_expr.ExprInt1(0))
     c &= zf
     e.append(m2_expr.ExprAff(myecx, myecx - m2_expr.ExprInt_from(myecx, 1)))
-    dst_o = m2_expr.ExprCond(c, dst, n).zeroExtend(instr.mode)
+    dst_o = m2_expr.ExprCond(c,
+                             dst.zeroExtend(instr.mode),
+                             n.zeroExtend(instr.mode))
     e.append(m2_expr.ExprAff(meip, dst_o))
     e.append(m2_expr.ExprAff(ir.IRDst, dst_o))
     return e, []
@@ -2414,9 +2459,65 @@ def rdtsc(ir, instr):
     return e, []
 
 
-# XXX TODO
 def daa(ir, instr):
-    return [], None
+    e = []
+    r_al = mRAX[instr.mode][:8]
+
+    cond1 = expr_cmpu(r_al[:4], m2_expr.ExprInt_fromsize(4, 0x9)) | af
+    e.append(m2_expr.ExprAff(af, cond1))
+
+
+    cond2 = expr_cmpu(m2_expr.ExprInt8(6), r_al)
+    cond3 = expr_cmpu(r_al, m2_expr.ExprInt8(0x99)) | cf
+
+
+    cf_c1 = m2_expr.ExprCond(cond1,
+                             cf | (cond2),
+                             m2_expr.ExprInt1(0))
+    new_cf = m2_expr.ExprCond(cond3,
+                              m2_expr.ExprInt1(1),
+                              m2_expr.ExprInt1(0))
+    e.append(m2_expr.ExprAff(cf, new_cf))
+
+    al_c1 = m2_expr.ExprCond(cond1,
+                             r_al + m2_expr.ExprInt8(6),
+                             r_al)
+
+    new_al = m2_expr.ExprCond(cond3,
+                              al_c1 + m2_expr.ExprInt8(0x60),
+                              al_c1)
+    e.append(m2_expr.ExprAff(r_al, new_al))
+    return e, []
+
+def das(ir, instr):
+    e = []
+    r_al = mRAX[instr.mode][:8]
+
+    cond1 = expr_cmpu(r_al[:4], m2_expr.ExprInt_fromsize(4, 0x9)) | af
+    e.append(m2_expr.ExprAff(af, cond1))
+
+
+    cond2 = expr_cmpu(m2_expr.ExprInt8(6), r_al)
+    cond3 = expr_cmpu(r_al, m2_expr.ExprInt8(0x99)) | cf
+
+
+    cf_c1 = m2_expr.ExprCond(cond1,
+                             cf | (cond2),
+                             m2_expr.ExprInt1(0))
+    new_cf = m2_expr.ExprCond(cond3,
+                              m2_expr.ExprInt1(1),
+                              cf_c1)
+    e.append(m2_expr.ExprAff(cf, new_cf))
+
+    al_c1 = m2_expr.ExprCond(cond1,
+                             r_al - m2_expr.ExprInt8(6),
+                             r_al)
+
+    new_al = m2_expr.ExprCond(cond3,
+                              al_c1 - m2_expr.ExprInt8(0x60),
+                              al_c1)
+    e.append(m2_expr.ExprAff(r_al, new_al))
+    return e, []
 
 
 def aam(ir, instr, a):
@@ -3175,7 +3276,9 @@ mnemo_func = {'mov': mov,
               'inc': inc,
               'dec': dec,
               'push': push,
+              'pushw': pushw,
               'pop': pop,
+              'popw': popw,
               'sete': sete,
               'setnz': setnz,
               'setl': setl,
@@ -3268,6 +3371,7 @@ mnemo_func = {'mov': mov,
               'cqo': cqo,
 
               'daa': daa,
+              'das': das,
               'aam': aam,
               'aad': aad,
               'aaa': aaa,
