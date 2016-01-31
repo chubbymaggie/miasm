@@ -6,6 +6,7 @@ IP = ExprId('IP', 16)
 EIP = ExprId('EIP', 32)
 RIP = ExprId('RIP', 64)
 exception_flags = ExprId('exception_flags', 32)
+interrupt_num = ExprId('interrupt_num', 8)
 
 # GP
 
@@ -248,7 +249,6 @@ reg_float_address = 'reg_float_address'
 reg_float_ds = 'reg_float_ds'
 
 
-
 dr0 = ExprId(reg_dr0)
 dr1 = ExprId(reg_dr1)
 dr2 = ExprId(reg_dr2)
@@ -342,6 +342,14 @@ float_st5 = ExprId("float_st5", 64)
 float_st6 = ExprId("float_st6", 64)
 float_st7 = ExprId("float_st7", 64)
 
+
+float_list = [float_st0, float_st1, float_st2, float_st3,
+              float_st4, float_st5, float_st6, float_st7]
+
+float_replace = {fltregs32_expr[i]: float_list[i] for i in xrange(8)}
+float_replace[r_st_all.expr[0]] = float_st0
+
+
 EAX_init = ExprId('EAX_init')
 EBX_init = ExprId('EBX_init')
 ECX_init = ExprId('ECX_init')
@@ -392,7 +400,7 @@ all_regs_ids = [
     XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15,
 
 
-    exception_flags,
+    exception_flags, interrupt_num,
 ] + fltregs32_expr
 
 all_regs_ids_no_alias = [
@@ -414,7 +422,7 @@ all_regs_ids_no_alias = [
     XMM8, XMM9, XMM10, XMM11, XMM12, XMM13, XMM14, XMM15,
 
 
-    exception_flags,
+    exception_flags, interrupt_num,
 ] + fltregs32_expr
 
 all_regs_ids_byname = dict([(x.name, x) for x in all_regs_ids])
@@ -428,7 +436,7 @@ for i, r in enumerate(all_regs_ids):
 
 regs_flt_expr = [float_st0, float_st1, float_st2, float_st3,
                  float_st4, float_st5, float_st6, float_st7,
-             ]
+                 ]
 
 mRAX = {16: AX, 32: EAX, 64: RAX}
 mRBX = {16: BX, 32: EBX, 64: RBX}

@@ -8,6 +8,7 @@ from miasm2.jitter.csts import *
 from miasm2.core.utils import *
 from miasm2.core.bin_stream import bin_stream_vm
 from miasm2.ir.ir2C import init_arch_C
+from miasm2.core.interval import interval
 
 hnd = logging.StreamHandler()
 hnd.setFormatter(logging.Formatter("[%(levelname)s]: %(message)s"))
@@ -113,6 +114,9 @@ class CallbackHandler(object):
 
         return empty_keys
 
+    def has_callbacks(self, name):
+        return name in self.callbacks
+
     def call_callbacks(self, name, *args):
         """Call callbacks associated to key 'name' with arguments args. While
         callbacks return True, continue with next callback.
@@ -134,17 +138,17 @@ class CallbackHandlerBitflag(CallbackHandler):
 
     "Handle a list of callback with conditions on bitflag"
 
-    def __call__(self, bitflag, *args):
+    def call_callbacks(self, bitflag, *args):
         """Call each callbacks associated with bit set in bitflag. While
         callbacks return True, continue with next callback.
         Iterator on other results"""
 
         res = True
-        for b in self.callbacks.keys():
-
-            if b & bitflag != 0:
+        for bitflag_expected in self.callbacks:
+            if bitflag_expected & bitflag == bitflag_expected:
                 # If the flag matched
-                for res in self.call_callbacks(b, *args):
+                for res in super(CallbackHandlerBitflag,
+                                 self).call_callbacks(bitflag_expected, *args):
                     if res is not True:
                         yield res
 
@@ -257,6 +261,10 @@ class jitter:
         """
         self.breakpoints_handler.add_callback(addr, callback)
         self.jit.add_disassembly_splits(addr)
+        # De-jit previously jitted blocks
+        self.jit.addr_mod = interval([(addr, addr)])
+        self.jit.updt_automod_code(self.vm)
+
 
     def set_breakpoint(self, addr, *args):
         """Set callbacks associated with addr.
@@ -285,7 +293,7 @@ class jitter:
         """Wrapper on JiT backend. Run the code at PC and return the next PC.
         @pc: address of code to run"""
 
-        return self.jit.runbloc(self.cpu, self.vm, pc)
+        return self.jit.runbloc(self.cpu, self.vm, pc, self.breakpoints_handler.callbacks)
 
     def runiter_once(self, pc):
         """Iterator on callbacks results on code running from PC.
@@ -301,7 +309,7 @@ class jitter:
 
         # Check breakpoints
         old_pc = self.pc
-        for res in self.breakpoints_handler(self.pc, self):
+        for res in self.breakpoints_handler.call_callbacks(self.pc, self):
             if res is not True:
                 yield res
 
@@ -420,7 +428,7 @@ class jitter:
     def add_lib_handler(self, libs, user_globals=None):
         """Add a function to handle libs call with breakpoints
         @libs: libimp instance
-        @user_globals: dictionnary for defined user function
+        @user_globals: dictionary for defined user function
         """
         if user_globals is None:
             user_globals = {}

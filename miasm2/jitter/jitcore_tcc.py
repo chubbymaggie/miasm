@@ -2,11 +2,11 @@
 #-*- coding:utf-8 -*-
 
 import os
-from miasm2.ir.ir2C import irblocs2C
-from subprocess import Popen, PIPE
-import miasm2.jitter.jitcore as jitcore
 from distutils.sysconfig import get_python_inc
-import Jittcc
+from subprocess import Popen, PIPE
+
+from miasm2.ir.ir2C import irblocs2C
+from miasm2.jitter import jitcore, Jittcc
 
 
 def jit_tcc_compil(func_name, func_code):
@@ -138,7 +138,7 @@ class JitCore_Tcc(jitcore.JitCore):
 
     def jitirblocs(self, label, irblocs):
         f_name = "bloc_%s" % label.name
-        f_declaration = 'void %s(block_id * BlockDst, JitCpu* jitcpu)' % f_name
+        f_declaration = 'int %s(block_id * BlockDst, JitCpu* jitcpu)' % f_name
         out = irblocs2C(self.ir_arch, self.resolver, label, irblocs,
                         gen_exception_code=True,
                         log_mn=self.log_mn,

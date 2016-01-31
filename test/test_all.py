@@ -13,6 +13,7 @@ TAGS = {"regression": "REGRESSION", # Regression tests
         "long": "LONG", # Very time consumming tests
         "llvm": "LLVM", # LLVM dependency is required
         "z3": "Z3", # Z3 dependecy is needed
+        "qemu": "QEMU", # QEMU tests (several tests)
         }
 
 # Regression tests
@@ -38,6 +39,16 @@ for script in ["x86/sem.py",
                "x86/unit/mn_stack.py",
                "x86/unit/mn_daa.py",
                "x86/unit/mn_das.py",
+               "x86/unit/mn_int.py",
+               "x86/unit/mn_pshufb.py",
+               "x86/unit/mn_psrl_psll.py",
+               "x86/unit/mn_pmaxu.py",
+               "x86/unit/mn_pminu.py",
+               "x86/unit/mn_pcmpeq.py",
+               "x86/unit/mn_punpck.py",
+               "x86/unit/mn_pinsr.py",
+               "x86/unit/mn_pextr.py",
+               "x86/unit/mn_pmovmskb.py",
                "arm/arch.py",
                "arm/sem.py",
                "aarch64/unit/mn_ubfm.py",
@@ -46,8 +57,80 @@ for script in ["x86/sem.py",
                "msp430/sem.py",
                "sh4/arch.py",
                "mips32/arch.py",
+               "mips32/unit/mn_bcc.py",
                ]:
     testset += RegressionTest([script], base_dir="arch")
+
+### QEMU regression tests
+class QEMUTest(RegressionTest):
+    """Test against QEMU regression tests
+    An expected output is provided, computed on a x86 host"""
+
+    SCRIPT_NAME = "testqemu.py"
+    SAMPLE_NAME = "test-i386"
+    EXPECTED_PATH = "expected"
+
+    def __init__(self, name, jitter, *args, **kwargs):
+        super(QEMUTest, self).__init__([self.SCRIPT_NAME], *args, **kwargs)
+        self.base_dir = os.path.join(self.base_dir, "arch", "x86", "qemu")
+        test_name = "test_%s" % name
+        expected_output = os.path.join(self.EXPECTED_PATH, test_name) + ".exp"
+        self.command_line += [self.SAMPLE_NAME,
+                              test_name,
+                              expected_output,
+                              "--jitter",
+                              jitter,
+        ]
+        self.tags.append(TAGS["qemu"])
+
+
+# Test name -> supported jitter engines
+QEMU_TESTS = {
+    # Operations
+    "btr": ("tcc", "python"),
+    "bts": ("tcc", "python"),
+    "bt": ("tcc", "python"),
+    "shrd": ("tcc", "python"),
+    "shld": ("tcc", "python"),
+    "rcl": ("tcc", "python"),
+    "rcr": ("tcc", "python"),
+    "ror": ("tcc", "python"),
+    "rol": ("tcc", "python"),
+    "sar": ("tcc", "python"),
+    "shr": ("tcc", "python"),
+    "shl": ("tcc", "python"),
+    "not": ("tcc", "python"),
+    "neg": ("tcc", "python"),
+    "dec": ("tcc", "python"),
+    "inc": ("tcc", "python"),
+    "sbb": ("tcc", "python"),
+    "adc": ("tcc", "python"),
+    "cmp": ("tcc", "python"),
+    "or": ("tcc", "python"),
+    "and": ("tcc", "python"),
+    "xor": ("tcc", "python"),
+    "sub": ("tcc", "python"),
+    "add": ("tcc", "python"),
+    # Specifics
+    "bsx": ("tcc", "python"),
+    "mul": ("tcc", "python"),
+    "jcc": ("tcc", "python"),
+    "loop": ("tcc", "python"),
+    "lea": ("tcc", "python"),
+    "self_modifying_code": ("tcc", "python"),
+    "conv": ("tcc", "python"),
+    "bcd": ("tcc", "python"),
+    "xchg": ("tcc", "python"),
+    "string": ("tcc", "python"),
+    "misc": ("tcc", "python"),
+    # Unsupported
+    # "floats", "segs", "code16", "exceptions", "single_step"
+}
+
+
+for test_name, jitters in QEMU_TESTS.iteritems():
+    for jitter_engine in jitters:
+        testset += QEMUTest(test_name, jitter_engine)
 
 
 ## Semantic
@@ -68,7 +151,7 @@ class SemanticTestAsm(RegressionTest):
                              input_filename,
                              output_filename,
                              self.container_dct.get(container, '')]
-        self.products = [output_filename, "graph.txt"]
+        self.products = [output_filename, "graph.dot"]
 
 
 class SemanticTestExec(RegressionTest):
@@ -108,8 +191,12 @@ for script in ["interval.py",
                "parse_asm.py",
                "utils.py",
                "sembuilder.py",
+               "test_types.py",
                ]:
     testset += RegressionTest([script], base_dir="core")
+testset += RegressionTest(["asmbloc.py"], base_dir="core",
+                          products=["graph.dot", "graph2.dot",
+                                    "graph3.dot", "graph4.dot"])
 ## Expression
 for script in ["modint.py",
                "expression.py",
@@ -129,6 +216,8 @@ testset += RegressionTest(["analysis.py"], base_dir="ir",
             for test_nb in xrange(1, 18))
                                     for fname in fnames])
 testset += RegressionTest(["z3_ir.py"], base_dir="ir/translators",
+                          tags=[TAGS["z3"]])
+testset += RegressionTest(["smt2.py"], base_dir="ir/translators",
                           tags=[TAGS["z3"]])
 ## OS_DEP
 for script in ["win_api_x86_32.py",
@@ -189,8 +278,8 @@ testset += ExampleAssembler(["simple.py"])
 class ExampleShellcode(ExampleAssembler):
     """Specificities:
     - script: asm/shellcode.py
-    - @products: graph.txt + 3rd arg
-    - apply get_sample on each products (!= graph.txt)
+    - @products: graph.dot + 3rd arg
+    - apply get_sample on each products (!= graph.dot)
     - apply get_sample on the 2nd and 3rd arg (source, output)
     """
 
@@ -200,7 +289,7 @@ class ExampleShellcode(ExampleAssembler):
                              self.command_line[0]] + \
                              map(Example.get_sample, self.command_line[1:3]) + \
                              self.command_line[3:]
-        self.products = [self.command_line[3], "graph.txt"]
+        self.products = [self.command_line[3], "graph.dot"]
 
 testset += ExampleShellcode(['x86_32', 'x86_32_manip_ptr.S', "demo_x86_32.bin"])
 
@@ -249,11 +338,12 @@ class ExampleDisassembler(Example):
 
 
 for script, prods in [(["single_instr.py"], []),
-                      (["function.py"], ["graph.txt"]),
+                      (["callback.py"], []),
+                      (["function.py"], ["graph.dot"]),
                       (["file.py", Example.get_sample("box_upx.exe"),
-                        "0x407570"], ["graph.txt"]),
+                        "0x407570"], ["graph.dot"]),
                       (["full.py", Example.get_sample("box_upx.exe")],
-                       ["graph_execflow.txt", "lines.txt"]),
+                       ["graph_execflow.dot", "lines.dot"]),
                       ]:
     testset += ExampleDisassembler(script, products=prods)
 
@@ -262,13 +352,15 @@ class ExampleDisasmFull(ExampleDisassembler):
     """DisasmFull specificities:
     - script: disasm/full.py
     - flags: -g -s
-    - @products: graph_execflow.txt, graph_irflow.txt, lines.txt, out.txt
+    - @products: graph_execflow.dot, graph_irflow.dot, graph_irflow_raw.dot,
+                 lines.dot, out.dot
     """
 
     def __init__(self, *args, **kwargs):
         super(ExampleDisasmFull, self).__init__(*args, **kwargs)
         self.command_line = ["full.py", "-g", "-s", "-m"] + self.command_line
-        self.products += ["graph_execflow.txt", "graph_irflow.txt", "lines.txt"]
+        self.products += ["graph_execflow.dot", "graph_irflow.dot",
+                          "graph_irflow_raw.dot", "lines.dot"]
 
 
 testset += ExampleDisasmFull(["arml", Example.get_sample("demo_arm_l.bin"),
@@ -313,14 +405,14 @@ for args in [[], ["--symb"]]:
     testset += ExampleExpression(["graph_dataflow.py",
                                   Example.get_sample("sc_connect_back.bin"),
                                   "0x2e"] + args,
-                                 products=["data.txt"])
+                                 products=["data.dot"])
 testset += ExampleExpression(["asm_to_ir.py"],
-                             products=["graph.txt", "graph2.txt"])
+                             products=["graph.dot", "graph2.dot"])
 testset += ExampleExpression(["get_read_write.py"],
-                             products=["graph_instr.txt"])
+                             products=["graph_instr.dot"])
 testset += ExampleExpression(["solve_condition_stp.py",
                               Example.get_sample("simple_test.bin")],
-                             products=["graph_instr.txt", "out.txt"])
+                             products=["graph_instr.dot", "out.dot"])
 
 for script in [["basic_op.py"],
                ["basic_simplification.py"],
@@ -394,6 +486,8 @@ for script, dep in [(["x86_32.py", Example.get_sample("x86_32_sc.bin")], []),
         testset += ExampleJitter(script + ["--jitter", jitter], depends=dep,
                                  tags=tags)
 
+testset += ExampleJitter(["example_types.py"])
+
 
 if __name__ == "__main__":
     # Argument parsing
@@ -402,9 +496,9 @@ if __name__ == "__main__":
                         action="store_true")
     parser.add_argument("-c", "--coverage", help="Include code coverage",
                         action="store_true")
-    parser.add_argument("-t", "--ommit-tags", help="Ommit tests based on tags \
+    parser.add_argument("-t", "--omit-tags", help="Omit tests based on tags \
 (tag1,tag2). Available tags are %s. \
-By default, no tag is ommited." % ", ".join(TAGS.keys()), default="")
+By default, no tag is omitted." % ", ".join(TAGS.keys()), default="")
     parser.add_argument("-n", "--do-not-clean",
                         help="Do not clean tests products", action="store_true")
     args = parser.parse_args()
@@ -414,9 +508,9 @@ By default, no tag is ommited." % ", ".join(TAGS.keys()), default="")
     if args.mono is True or args.coverage is True:
         multiproc = False
 
-    ## Parse ommit-tags argument
+    ## Parse omit-tags argument
     exclude_tags = []
-    for tag in args.ommit_tags.split(","):
+    for tag in args.omit_tags.split(","):
         if not tag:
             continue
         if tag not in TAGS:

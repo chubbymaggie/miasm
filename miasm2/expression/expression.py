@@ -114,26 +114,27 @@ class Expr(object):
 
     "Parent class for Miasm Expressions"
 
-    is_term = False   # Terminal expression
-    is_simp = False   # Expression already simplified
-    is_canon = False  # Expression already canonised
-    is_eval = False   # Expression already evalued
+    __slots__ = ["is_term", "is_simp", "is_canon",
+                 "is_eval", "_hash", "_repr", "_size",
+                 "is_var_ident"]
 
-    _hash = None
-    _repr = None
 
     def set_size(self, value):
         raise ValueError('size is not mutable')
 
-    def __init__(self, arg):
-        self.arg = arg
+    def __init__(self):
+        self.is_term = False   # Terminal expression
+        self.is_simp = False   # Expression already simplified
+        self.is_canon = False  # Expression already canonised
+        self.is_eval = False   # Expression already evalued
+        self.is_var_ident = False # Expression not identifier
+
+        self._hash = None
+        self._repr = None
 
     size = property(lambda self: self._size)
 
     # Common operations
-
-    def __str__(self):
-        return str(self.arg)
 
     def __getitem__(self, i):
         if not isinstance(i, slice):
@@ -145,12 +146,6 @@ class Expr(object):
 
     def get_size(self):
         raise DeprecationWarning("use X.size instead of X.get_size()")
-
-    def get_r(self, mem_read=False, cst_read=False):
-        return self.arg.get_r(mem_read, cst_read)
-
-    def get_w(self):
-        return self.arg.get_w()
 
     def is_function_call(self):
         """Returns true if the considered Expr is a function call
@@ -232,7 +227,7 @@ class Expr(object):
 
     def replace_expr(self, dct=None):
         """Find and replace sub expression using dct
-        @dct: dictionnary of Expr -> *
+        @dct: dictionary of Expr -> *
         """
         if dct is None:
             dct = {}
@@ -288,7 +283,7 @@ class Expr(object):
         if self.size == size:
             return self
         ad_size = size - self.size
-        n = ExprInt_fromsize(ad_size, 0)
+        n = ExprInt(0, ad_size)
         return ExprCompose([(self, 0, self.size),
                             (n, self.size, size)])
 
@@ -302,9 +297,8 @@ class Expr(object):
         ad_size = size - self.size
         c = ExprCompose([(self, 0, self.size),
                          (ExprCond(self.msb(),
-                                   ExprInt_fromsize(
-                                       ad_size, size2mask(ad_size)),
-                                   ExprInt_fromsize(ad_size, 0)),
+                                   ExprInt(size2mask(ad_size), ad_size),
+                                   ExprInt(0, ad_size)),
                           self.size, size)
                          ])
         return c
@@ -331,7 +325,7 @@ class Expr(object):
     def set_mask(self, value):
         raise ValueError('mask is not mutable')
 
-    mask = property(lambda self: ExprInt_fromsize(self.size, -1))
+    mask = property(lambda self: ExprInt(-1, self.size))
 
 
 class ExprInt(Expr):
@@ -344,15 +338,25 @@ class ExprInt(Expr):
      - Constant 0x12345678 on 32bits
      """
 
-    def __init__(self, arg):
-        """Create an ExprInt from a numpy int
-        @arg: numpy int"""
+    __slots__ = ["_arg"]
 
-        if not is_modint(arg):
-            raise ValueError('arg must by numpy int! %s' % arg)
+    def __init__(self, num, size=None):
+        """Create an ExprInt from a modint or num/size
+        @arg: modint or num
+        @size: (optionnal) int size"""
 
-        self._arg = arg
-        self._size = self.arg.size
+        super(ExprInt, self).__init__()
+
+        if is_modint(num):
+            self._arg = num
+            self._size = self.arg.size
+            if size is not None and num.size != size:
+                raise RuntimeError("size must match modint size")
+        elif size is not None:
+            self._arg = mod_size2uint[size](num)
+            self._size = self.arg.size
+        else:
+            raise ValueError('arg must by modint or (int,size)! %s' % num)
 
     arg = property(lambda self: self._arg)
 
@@ -391,7 +395,6 @@ class ExprInt(Expr):
     def __contains__(self, e):
         return self == e
 
-
     @visit_chk
     def visit(self, cb, tv=None):
         return self
@@ -416,11 +419,14 @@ class ExprId(Expr):
      - variable v1
      """
 
+    __slots__ = ["_name"]
+
     def __init__(self, name, size=32):
         """Create an identifier
         @name: str, identifier's name
         @size: int, identifier's size
         """
+        super(ExprId, self).__init__()
 
         self._name, self._size = name, size
 
@@ -474,11 +480,16 @@ class ExprAff(Expr):
      - var1 <- 2
     """
 
+    __slots__ = ["_src", "_dst"]
+
     def __init__(self, dst, src):
         """Create an ExprAff for dst <- src
         @dst: Expr, affectation destination
         @src: Expr, affectation source
         """
+
+        super(ExprAff, self).__init__()
+
         if dst.size != src.size:
             raise ValueError(
                 "sanitycheck: ExprAff args must have same size! %s" %
@@ -500,7 +511,6 @@ class ExprAff(Expr):
 
     dst = property(lambda self: self._dst)
     src = property(lambda self: self._src)
-
 
     def __str__(self):
         return "%s = %s" % (str(self._dst), str(self._src))
@@ -575,12 +585,16 @@ class ExprCond(Expr):
      - if (cond) then ... else ...
     """
 
+    __slots__ = ["_cond", "_src1", "_src2"]
+
     def __init__(self, cond, src1, src2):
         """Create an ExprCond
         @cond: Expr, condition
         @src1: Expr, value if condition is evaled to not zero
         @src2: Expr, value if condition is evaled zero
         """
+
+        super(ExprCond, self).__init__()
 
         assert(src1.size == src2.size)
 
@@ -624,7 +638,7 @@ class ExprCond(Expr):
         src2 = self._src2.visit(cb, tv)
         if (cond == self._cond and
             src1 == self._src1 and
-            src2 == self._src2):
+                src2 == self._src2):
             return self
         return ExprCond(cond, src1, src2)
 
@@ -654,11 +668,16 @@ class ExprMem(Expr):
      - Memory write
     """
 
+    __slots__ = ["_arg", "_size"]
+
     def __init__(self, arg, size=32):
         """Create an ExprMem
         @arg: Expr, memory access address
         @size: int, memory access size
         """
+
+        super(ExprMem, self).__init__()
+
         if not isinstance(arg, Expr):
             raise ValueError(
                 'ExprMem: arg must be an Expr (not %s)' % type(arg))
@@ -722,11 +741,15 @@ class ExprOp(Expr):
      - parity bit(var1)
     """
 
+    __slots__ = ["_op", "_args"]
+
     def __init__(self, op, *args):
         """Create an ExprOp
         @op: str, operation
         @*args: Expr, operand list
         """
+
+        super(ExprOp, self).__init__()
 
         sizes = set([arg.size for arg in args])
 
@@ -745,6 +768,7 @@ class ExprOp(Expr):
         # Set size for special cases
         if self._op in [
                 '==', 'parity', 'fcom_c0', 'fcom_c1', 'fcom_c2', 'fcom_c3',
+                'fxam_c0', 'fxam_c1', 'fxam_c2', 'fxam_c3',
                 "access_segment_ok", "load_segment_limit_ok", "bcdadd_cf",
                 "ucomiss_zf", "ucomiss_pf", "ucomiss_cf"]:
             sz = 1
@@ -760,13 +784,20 @@ class ExprOp(Expr):
                           'int_16_to_double', 'int_32_to_double',
                           'int_64_to_double', 'int_80_to_double']:
             sz = 64
-        elif self._op in ['double_to_mem_16', 'double_to_int_16', 'double_trunc_to_int_16']:
+        elif self._op in ['double_to_mem_16', 'double_to_int_16',
+                          'float_trunc_to_int_16', 'double_trunc_to_int_16']:
             sz = 16
-        elif self._op in ['double_to_mem_32', 'double_to_int_32', 'double_trunc_to_int_32']:
+        elif self._op in ['double_to_mem_32', 'double_to_int_32',
+                          'float_trunc_to_int_32', 'double_trunc_to_int_32',
+                          'double_to_float']:
             sz = 32
-        elif self._op in ['double_to_mem_64', 'double_to_int_64', 'double_trunc_to_int_64']:
+        elif self._op in ['double_to_mem_64', 'double_to_int_64',
+                          'float_trunc_to_int_64', 'double_trunc_to_int_64',
+                          'float_to_double']:
             sz = 64
-        elif self._op in ['double_to_mem_80', 'double_to_int_80', 'double_trunc_to_int_80']:
+        elif self._op in ['double_to_mem_80', 'double_to_int_80',
+                          'float_trunc_to_int_80',
+                          'double_trunc_to_int_80']:
             sz = 80
         elif self._op in ['segm']:
             sz = self._args[1].size
@@ -785,11 +816,14 @@ class ExprOp(Expr):
     def __str__(self):
         if self.is_associative():
             return '(' + self._op.join([str(arg) for arg in self._args]) + ')'
+        if (self._op.startswith('call_func_') or
+            self._op == 'cpuid' or
+            len(self._args) > 2 or
+                self._op in ['parity', 'segm']):
+            return self._op + '(' + ', '.join([str(arg) for arg in self._args]) + ')'
         if len(self._args) == 2:
             return ('(' + str(self._args[0]) +
                     ' ' + self.op + ' ' + str(self._args[1]) + ')')
-        elif len(self._args) > 2:
-            return self._op + '(' + ', '.join([str(arg) for arg in self._args]) + ')'
         else:
             return reduce(lambda x, y: x + ' ' + str(y),
                           self._args,
@@ -854,7 +888,11 @@ class ExprOp(Expr):
 
 class ExprSlice(Expr):
 
+    __slots__ = ["_arg", "_start", "_stop"]
+
     def __init__(self, arg, start, stop):
+        super(ExprSlice, self).__init__()
+
         assert(start < stop)
 
         self._arg, self._start, self._stop = arg, start, stop
@@ -934,11 +972,15 @@ class ExprCompose(Expr):
     In the example, salad.size == 3.
     """
 
+    __slots__ = ["_args"]
+
     def __init__(self, args):
         """Create an ExprCompose
         The ExprCompose is contiguous and starts at 0
         @args: tuple(Expr, int, int)
         """
+
+        super(ExprCompose, self).__init__()
 
         last_stop = 0
         args = sorted(args, key=itemgetter(1))
@@ -1154,11 +1196,6 @@ def ExprInt_from(e, i):
     return ExprInt(mod_size2uint[e.size](i))
 
 
-def ExprInt_fromsize(size, i):
-    "Generate ExprInt with a given size"
-    return ExprInt(mod_size2uint[size](i))
-
-
 def get_expr_ids_visit(e, ids):
     if isinstance(e, ExprId):
         ids.add(e)
@@ -1177,7 +1214,7 @@ def test_set(e, v, tks, result):
     @e : Expr
     @v : Expr
     @tks : list of ExprId, available jokers
-    @result : dictionnary of ExprId -> Expr, current context
+    @result : dictionary of ExprId -> Expr, current context
     """
 
     if not v in tks:
@@ -1190,11 +1227,11 @@ def test_set(e, v, tks, result):
 
 def MatchExpr(e, m, tks, result=None):
     """Try to match m expression with e expression with tks jokers.
-    Result is output dictionnary with matching joker values.
+    Result is output dictionary with matching joker values.
     @e : Expr to test
     @m : Targetted Expr
     @tks : list of ExprId, available jokers
-    @result : dictionnary of ExprId -> Expr, output matching context
+    @result : dictionary of ExprId -> Expr, output matching context
     """
 
     if result is None:

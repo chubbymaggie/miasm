@@ -22,6 +22,16 @@ class DebugBreakpointSoft(DebugBreakpoint):
         return "Soft BP @0x%08x" % self.addr
 
 
+class DebugBreakpointTerminate(DebugBreakpoint):
+    "Stand for an execution termination"
+
+    def __init__(self, status):
+        self.status = status
+
+    def __str__(self):
+        return "Terminate with %s" % self.status
+
+
 class DebugBreakpointMemory(DebugBreakpoint):
 
     "Stand for memory breakpoint"
@@ -131,8 +141,9 @@ class Debugguer(object):
             self.myjit.jit.log_newbloc = newbloc
 
     def handle_exception(self, res):
-        if res is None:
-            return
+        if not res:
+            # A breakpoint has stopped the execution
+            return DebugBreakpointTerminate(res)
 
         if isinstance(res, DebugBreakpointSoft):
             print "Breakpoint reached @0x%08x" % res.addr
@@ -149,12 +160,15 @@ class Debugguer(object):
         else:
             raise NotImplementedError("type res")
 
+        # Repropagate res
+        return res
+
     def step(self):
         "Step in jit"
 
         self.myjit.jit.set_options(jit_maxline=1)
-        self.myjit.jit.addr_mod = interval([(self.myjit.pc, self.myjit.pc)])
-        self.myjit.jit.updt_automod_code(self.myjit.vm)
+        # Reset all jitted blocks
+        self.myjit.jit.clear_jitted_blocks()
 
         res = self.myjit.continue_run(step=True)
         self.handle_exception(res)
@@ -165,9 +179,8 @@ class Debugguer(object):
         return res
 
     def run(self):
-        res = self.myjit.continue_run()
-        self.handle_exception(res)
-        return res
+        status = self.myjit.continue_run()
+        return self.handle_exception(status)
 
     def get_mem(self, addr, size=0xF):
         "hexdump @addr, size"
@@ -260,10 +273,7 @@ class DebugCmd(cmd.Cmd, object):
 
     def add_breakpoints(self, bp_addr):
         for addr in bp_addr:
-            if "0x" in addr:
-                addr = int(addr, 16)
-            else:
-                addr = int(addr)
+	    addr = int(addr, 0)
 
             good = True
             for i, dbg_obj in enumerate(self.dbg.bp_list):
@@ -346,17 +356,11 @@ class DebugCmd(cmd.Cmd, object):
 
         args = arg.split(" ")
         if len(args) >= 2:
-            if "0x" in args[1]:
-                size = int(args[1], 16)
-            else:
-                size = int(args[1])
+            size = int(args[1], 0)
         else:
             size = 0xF
 
-        if "0x" in args[0]:
-            addr = int(args[0], 16)
-        else:
-            addr = int(args[0])
+        addr = int(args[0], 0)
 
         self.dbg.watch_mem(addr, size)
 
@@ -432,16 +436,10 @@ class DebugCmd(cmd.Cmd, object):
         else:
             args = arg.split(" ")
             if len(args) >= 2:
-                if "0x" in args[1]:
-                    size = int(args[1], 16)
-                else:
-                    size = int(args[1])
+                size = int(args[1], 0)
             else:
                 size = 0xF
-            if "0x" in args[0]:
-                addr = int(args[0], 16)
-            else:
-                addr = int(args[0])
+            addr = int(args[0], 0)
 
             self.dbg.get_mem(addr, size)
 

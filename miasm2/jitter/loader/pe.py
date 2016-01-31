@@ -10,12 +10,25 @@ from elfesteem import *
 from miasm2.jitter.csts import *
 from miasm2.jitter.loader.utils import canon_libname_libfunc, libimp
 
-
 log = logging.getLogger('loader_pe')
 hnd = logging.StreamHandler()
 hnd.setFormatter(logging.Formatter("[%(levelname)s]: %(message)s"))
 log.addHandler(hnd)
-log.setLevel(logging.CRITICAL)
+log.setLevel(logging.INFO)
+
+
+def get_pe_dependencies(pe_obj):
+    """Return dependency set
+    @pe_obj: pe object"""
+
+    if pe_obj.DirImport.impdesc is None:
+        return set()
+    out = set()
+    for dependency in pe_obj.DirImport.impdesc:
+        libname = dependency.dlldescname.name.lower()
+        out.add(libname)
+    return out
+
 
 def get_import_address_pe(e):
     import2addr = defaultdict(set)
@@ -53,12 +66,11 @@ def preload_pe(vm, e, runtime_lib, patch_vm_imp=True):
     return dyn_funcs
 
 
-
 def is_redirected_export(e, ad):
     # test is ad points to code or dll name
     out = ''
     for i in xrange(0x200):
-        c = e.virt(ad + i)
+        c = e.virt.get(ad + i)
         if c == "\x00":
             break
         out += c
@@ -89,7 +101,6 @@ def get_export_name_addr_list(e):
     return out
 
 
-
 def vm_load_pe(vm, fdata, align_s=True, load_hdr=True, **kargs):
     """Load a PE in memory (@vm) from a data buffer @fdata
     @vm: VmMngr instance
@@ -102,6 +113,7 @@ def vm_load_pe(vm, fdata, align_s=True, load_hdr=True, **kargs):
     If all sections are aligned, they will be mapped on several different pages
     Otherwise, a big page is created, containing all sections
     """
+
     # Parse and build a PE instance
     pe = pe_init.PE(fdata, **kargs)
 
@@ -121,7 +133,8 @@ def vm_load_pe(vm, fdata, align_s=True, load_hdr=True, **kargs):
             min_len = min(pe.SHList[0].addr, 0x1000)
 
             # Get and pad the pe_hdr
-            pe_hdr = pe.content[:hdr_len] + max(0, (min_len - hdr_len)) * "\x00"
+            pe_hdr = pe.content[:hdr_len] + max(
+                0, (min_len - hdr_len)) * "\x00"
             vm.add_memory_page(pe.NThdr.ImageBase, PAGE_READ | PAGE_WRITE,
                                pe_hdr)
 
@@ -132,7 +145,8 @@ def vm_load_pe(vm, fdata, align_s=True, load_hdr=True, **kargs):
                 new_size = pe.SHList[i + 1].addr - section.addr
                 section.size = new_size
                 section.rawsize = new_size
-                section.data = strpatchwork.StrPatchwork(section.data[:new_size])
+                section.data = strpatchwork.StrPatchwork(
+                    section.data[:new_size])
                 section.offset = section.addr
 
             # Last section alignement
@@ -143,8 +157,10 @@ def vm_load_pe(vm, fdata, align_s=True, load_hdr=True, **kargs):
         for section in pe.SHList:
             data = str(section.data)
             data += "\x00" * (section.size - len(data))
-            vm.add_memory_page(pe.rva2virt(section.addr),
-                               PAGE_READ | PAGE_WRITE, data)
+            attrib = PAGE_READ
+            if section.flags & 0x80000000:
+                attrib |= PAGE_WRITE
+            vm.add_memory_page(pe.rva2virt(section.addr), attrib, data)
 
         return pe
 
@@ -196,6 +212,9 @@ def vm_load_pe_lib(vm, fname_in, libs, lib_path_base, **kargs):
     Return the corresponding PE instance
     Extra arguments are passed to vm_load_pe
     """
+
+    log.info('Loading module %r', fname_in)
+
     fname = os.path.join(lib_path_base, fname_in)
     with open(fname) as fstream:
         pe = vm_load_pe(vm, fstream.read(), **kargs)
@@ -203,20 +222,20 @@ def vm_load_pe_lib(vm, fname_in, libs, lib_path_base, **kargs):
     return pe
 
 
-def vm_load_pe_libs(vm, libs_name, libs, lib_path_base="win_dll", **kargs):
+def vm_load_pe_libs(vm, libs_name, libs, lib_path_base, **kargs):
     """Call vm_load_pe_lib on each @libs_name filename
     @vm: VmMngr instance
     @libs_name: list of str
     @libs: libimp_pe instance
     @lib_path_base: (optional) DLLs relative path
-    Return a dictionnary Filename -> PE instances
+    Return a dictionary Filename -> PE instances
     Extra arguments are passed to vm_load_pe_lib
     """
     return {fname: vm_load_pe_lib(vm, fname, libs, lib_path_base, **kargs)
             for fname in libs_name}
 
 
-def vm_fix_imports_pe_libs(lib_imgs, libs, lib_path_base="win_dll",
+def vm_fix_imports_pe_libs(lib_imgs, libs, lib_path_base,
                            patch_vm_imp=True, **kargs):
     for e in lib_imgs.values():
         preload_pe(e, libs, patch_vm_imp)
@@ -225,7 +244,7 @@ def vm_fix_imports_pe_libs(lib_imgs, libs, lib_path_base="win_dll",
 def vm2pe(myjit, fname, libs=None, e_orig=None,
           min_addr=None, max_addr=None,
           min_section_offset=0x1000, img_base=None,
-          added_funcs=None):
+          added_funcs=None, **kwargs):
     if e_orig:
         size = e_orig._wsize
     else:
@@ -235,8 +254,8 @@ def vm2pe(myjit, fname, libs=None, e_orig=None,
     if min_addr is None and e_orig is not None:
         min_addr = min([e_orig.rva2virt(s.addr) for s in e_orig.SHList])
     if max_addr is None and e_orig is not None:
-        max_addr = max([e_orig.rva2virt(s.addr + s.size) for s in e_orig.SHList])
-
+        max_addr = max([e_orig.rva2virt(s.addr + s.size)
+                       for s in e_orig.SHList])
 
     if img_base is None:
         img_base = e_orig.NThdr.ImageBase
@@ -271,7 +290,9 @@ def vm2pe(myjit, fname, libs=None, e_orig=None,
                 libbase, dllname = libs.fad2info[funcaddr]
                 libs.lib_get_add_func(libbase, dllname, addr)
 
-        new_dll = libs.gen_new_lib(mye, mye.virt.is_addr_in)
+        filter_import = kwargs.get(
+            'filter_import', lambda _, ad: mye.virt.is_addr_in(ad))
+        new_dll = libs.gen_new_lib(mye, filter_import)
     else:
         new_dll = {}
 
@@ -302,11 +323,26 @@ def vm2pe(myjit, fname, libs=None, e_orig=None,
 
 class libimp_pe(libimp):
 
+    def __init__(self, *args, **kwargs):
+        super(libimp_pe, self).__init__(*args, **kwargs)
+        # dependency -> redirector
+        self.created_redirected_imports = {}
+
     def add_export_lib(self, e, name):
+        if name in self.created_redirected_imports:
+            log.error("%r has previously been created due to redirect\
+            imports due to %r. Change the loading order.",
+                      name, self.created_redirected_imports[name])
+            raise RuntimeError('Bad import: loading previously created import')
+
         self.all_exported_lib.append(e)
         # will add real lib addresses to database
         if name in self.name2off:
             ad = self.name2off[name]
+            if e is not None and name in self.fake_libs:
+                log.error(
+                    "You are trying to load %r but it has been faked previously. Try loading this module earlier.", name)
+                raise RuntimeError("Bad import")
         else:
             log.debug('new lib %s', name)
             ad = e.NThdr.ImageBase
@@ -329,8 +365,6 @@ class libimp_pe(libimp):
                 ret = is_redirected_export(e, ad)
                 if ret:
                     exp_dname, exp_fname = ret
-                    # log.debug('export redirection %s' % imp_ord_or_name)
-                    # log.debug('source %s %s' % (exp_dname, exp_fname))
                     exp_dname = exp_dname + '.dll'
                     exp_dname = exp_dname.lower()
                     # if dll auto refes in redirection
@@ -340,17 +374,21 @@ class libimp_pe(libimp):
                             # schedule func
                             todo = [(imp_ord_or_name, ad)] + todo
                             continue
-                    elif not exp_dname in self.name2off:
-                        raise ValueError('load %r first' % exp_dname)
+                    else:
+                        # import redirected lib from non loaded dll
+                        if not exp_dname in self.name2off:
+                            self.created_redirected_imports.setdefault(
+                                exp_dname, set()).add(name)
+
+                        # Ensure import entry is created
+                        new_lib_base = self.lib_get_add_base(exp_dname)
+                        # Ensure function entry is created
+                        _ = self.lib_get_add_func(new_lib_base, exp_fname)
+
                     c_name = canon_libname_libfunc(exp_dname, exp_fname)
                     libad_tmp = self.name2off[exp_dname]
                     ad = self.lib_imp2ad[libad_tmp][exp_fname]
-                    # log.debug('%s' % hex(ad))
-                # if not imp_ord_or_name in self.lib_imp2dstad[libad]:
-                #    self.lib_imp2dstad[libad][imp_ord_or_name] = set()
-                # self.lib_imp2dstad[libad][imp_ord_or_name].add(dst_ad)
 
-                # log.debug('new imp %s %s' % (imp_ord_or_name, hex(ad)))
                 self.lib_imp2ad[libad][imp_ord_or_name] = ad
 
                 name_inv = dict([(x[1], x[0]) for x in self.name2off.items()])
@@ -359,10 +397,10 @@ class libimp_pe(libimp):
                 self.fad2cname[ad] = c_name
                 self.fad2info[ad] = libad, imp_ord_or_name
 
-    def gen_new_lib(self, target_pe, flt=lambda _: True):
+    def gen_new_lib(self, target_pe, filter_import=lambda peobj, ad: True, **kwargs):
         """Gen a new DirImport description
         @target_pe: PE instance
-        @flt: (boolean f(address)) restrict addresses to keep
+        @filter_import: (boolean f(pe, address)) restrict addresses to keep
         """
 
         new_lib = []
@@ -370,12 +408,13 @@ class libimp_pe(libimp):
             # Build an IMAGE_IMPORT_DESCRIPTOR
 
             # Get fixed addresses
-            out_ads = dict() # addr -> func_name
+            out_ads = dict()  # addr -> func_name
             for func_name, dst_addresses in self.lib_imp2dstad[ad].items():
-                out_ads.update({addr:func_name for addr in dst_addresses})
+                out_ads.update({addr: func_name for addr in dst_addresses})
 
-            # Filter available addresses according to @flt
-            all_ads = [addr for addr in out_ads.keys() if flt(addr)]
+            # Filter available addresses according to @filter_import
+            all_ads = [
+                addr for addr in out_ads.keys() if filter_import(target_pe, addr)]
             log.debug('ads: %s', map(hex, all_ads))
             if not all_ads:
                 continue
@@ -391,7 +430,8 @@ class libimp_pe(libimp):
                 # Find libname's Import Address Table
                 othunk = all_ads[0]
                 i = 0
-                while i + 1 < len(all_ads) and all_ads[i] + 4 == all_ads[i + 1]:
+                while (i + 1 < len(all_ads) and
+                       all_ads[i] + target_pe._wsize / 8 == all_ads[i + 1]):
                     i += 1
                 # 'i + 1' is IAT's length
 
@@ -412,10 +452,72 @@ class libimp_pe(libimp):
 
         return new_lib
 
+
+def vm_load_pe_and_dependencies(vm, fname, name2module, runtime_lib,
+                                lib_path_base, **kwargs):
+    """Load a binary and all its dependencies. Returns a dictionary containing
+    the association between binaries names and it's pe object
+
+    @vm: virtual memory manager instance
+    @fname: full path of the binary
+    @name2module: dict containing association between name and pe
+    object. Updated.
+    @runtime_lib: libimp instance
+    @lib_path_base: directory of the libraries containing dependencies
+
+    """
+
+    todo = [(fname, fname, 0)]
+    dependencies = []
+    weight2name = {}
+    done = set()
+
+    # Walk dependencies recursively
+    while todo:
+        name, fname, weight = todo.pop()
+        if name in done:
+            continue
+        done.add(name)
+        weight2name.setdefault(weight, set()).add(name)
+        if name in name2module:
+            pe_obj = name2module[name]
+        else:
+            try:
+                with open(fname) as fstream:
+                    log.info('Loading module name %r', fname)
+                    pe_obj = vm_load_pe(vm, fstream.read(), **kwargs)
+            except IOError:
+                log.error('Cannot open %s' % fname)
+                name2module[name] = None
+                continue
+            name2module[name] = pe_obj
+
+        new_dependencies = get_pe_dependencies(pe_obj)
+        todo += [(name, os.path.join(lib_path_base, name), weight - 1)
+                 for name in new_dependencies]
+
+    ordered_modules = sorted(weight2name.items())
+    for _, modules in ordered_modules:
+        for name in modules:
+            pe_obj = name2module[name]
+            if pe_obj is None:
+                continue
+            # Fix imports
+            if pe_obj.DirExport:
+                runtime_lib.add_export_lib(pe_obj, name)
+
+    for pe_obj in name2module.itervalues():
+        if pe_obj is None:
+            continue
+        preload_pe(vm, pe_obj, runtime_lib, patch_vm_imp=True)
+
+    return name2module
+
 # machine -> arch
 PE_machine = {0x14c: "x86_32",
               0x8664: "x86_64",
               }
+
 
 def guess_arch(pe):
     """Return the architecture specified by the PE container @pe.

@@ -325,6 +325,7 @@ conds_inv_expr, _, conds_inv_info = gen_regs(CONDS_INV, {})
 
 
 class instruction_aarch64(instruction):
+    __slots__ = []
     delayslot = 0
 
     def __init__(self, *args, **kargs):
@@ -592,7 +593,7 @@ class aarch64_simdreg_32_64_zero(aarch64_simdreg_32_64):
     def decode(self, v):
         if v == 0 and self.parent.opc.value == 1:
             size = 64 if self.parent.size.value else 32
-            self.expr = m2_expr.ExprInt_fromsize(size, 0)
+            self.expr = m2_expr.ExprInt(0, size)
             return True
         else:
             return super(aarch64_simdreg_32_64_zero, self).decode(v)
@@ -651,7 +652,7 @@ class aarch64_gpreg0(bsi, m_arg):
     def decode(self, v):
         size = 64 if self.parent.sf.value else 32
         if v == 0x1F:
-            self.expr = m2_expr.ExprInt_fromsize(size, 0)
+            self.expr = m2_expr.ExprInt(0, size)
         else:
             self.expr = self.gpregs_info[size].expr[v]
         return True
@@ -806,11 +807,11 @@ def set_imm_to_size(size, expr):
     if size == expr.size:
         return expr
     if size > expr.size:
-        expr = m2_expr.ExprInt_fromsize(size, expr.arg)
+        expr = m2_expr.ExprInt(int(expr.arg), size)
     else:
         if expr.arg > (1 << size) - 1:
             return None
-        expr = m2_expr.ExprInt_fromsize(size, expr.arg)
+        expr = m2_expr.ExprInt(int(expr.arg), size)
     return expr
 
 
@@ -845,7 +846,7 @@ class aarch64_imm_sf(imm_noarg):
 
     def decode(self, v):
         size = 64 if self.parent.sf.value else 32
-        self.expr = m2_expr.ExprInt_fromsize(size, v)
+        self.expr = m2_expr.ExprInt(v, size)
         return True
 
 
@@ -872,9 +873,9 @@ class aarch64_imm_sft(aarch64_imm_sf, m_arg):
     def decode(self, v):
         size = 64 if self.parent.sf.value else 32
         if self.parent.shift.value == 0:
-            self.expr = m2_expr.ExprInt_fromsize(size, v)
+            self.expr = m2_expr.ExprInt(v, size)
         elif self.parent.shift.value == 1:
-            self.expr = m2_expr.ExprInt_fromsize(size, v << 12)
+            self.expr = m2_expr.ExprInt(v << 12, size)
         else:
             return False
         return True
@@ -1076,7 +1077,7 @@ class aarch64_imm_nsr(aarch64_imm_sf, m_arg):
         size = 64 if self.parent.sf.value else 32
         mask = UINTS[size]((1 << (v + 1)) - 1)
         mask = ror(mask, self.parent.immr.value, size)
-        self.expr = m2_expr.ExprInt_fromsize(size, mask)
+        self.expr = m2_expr.ExprInt(mask, size)
         return True
 
     def encode(self):
@@ -1158,7 +1159,7 @@ class aarch64_imm_hw(m_arg):
 
     def decode(self, v):
         size = 64 if self.parent.sf.value else 32
-        self.expr = m2_expr.ExprInt_fromsize(size, v << (16 * self.parent.hw.value))
+        self.expr = m2_expr.ExprInt(v << (16 * self.parent.hw.value), size)
         return True
 
     def encode(self):
@@ -1184,8 +1185,8 @@ class aarch64_imm_hw_sc(m_arg):
 
     def decode(self, v):
         size = 64 if self.parent.sf.value else 32
-        expr = m2_expr.ExprInt_fromsize(size, v)
-        amount = m2_expr.ExprInt_fromsize(size, 16 * self.parent.hw.value)
+        expr = m2_expr.ExprInt(v, size)
+        amount = m2_expr.ExprInt(16 * self.parent.hw.value, size)
         if self.parent.hw.value:
             self.expr = m2_expr.ExprOp(self.shift_op, expr,  amount)
         else:
@@ -1451,6 +1452,7 @@ rn0 = bs(l=5, cls=(aarch64_gpreg0,), fname="rn")
 
 rmz = bs(l=5, cls=(aarch64_gpregz,), fname="rm")
 rnz = bs(l=5, cls=(aarch64_gpregz,), fname="rn")
+rdz = bs(l=5, cls=(aarch64_gpregz,), fname="rd")
 
 
 rn_n1 = bs(l=5, cls=(aarch64_gpreg_n1,), fname="rn")
@@ -1602,10 +1604,14 @@ aarch64op("addsub", [sf, bs_adsu_name, modf, bs('01011'), bs('00'), bs('1'), rm_
 aarch64op("neg", [sf, bs('1'), modf, bs('01011'), shift, bs('0'), rm_sft, imm6, bs('11111'), rd], [rd, rm_sft], alias=True)
 
 
-logic_name = {'AND': 0, 'ORR': 1, 'EOR': 2, 'ANDS': 3}
+logic_name = {'AND': 0, 'ORR': 1, 'EOR': 2}
 bs_logic_name = bs_name(l=2, name=logic_name)
 # logical (imm)
 aarch64op("logic", [sf, bs_logic_name, bs('100100'), immn, immr, imms, rn0, rd], [rd, rn0, imms])
+# ANDS
+aarch64op("ands", [sf, bs('11'), bs('100100'), immn, immr, imms, rn0, rdz], [rdz, rn0, imms])
+aarch64op("tst",  [sf, bs('11'), bs('100100'), immn, immr, imms, rn0, bs('11111')], [rn0, imms], alias=True)
+
 
 # bitfield move p.149
 logicbf_name = {'SBFM': 0b00, 'BFM': 0b01, 'UBFM': 0b10}

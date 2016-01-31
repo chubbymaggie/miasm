@@ -59,10 +59,12 @@ TCCState * tcc_init_state(void)
 
 PyObject* tcc_end(PyObject* self, PyObject* args)
 {
-	TCCState *tcc_state = NULL;
-	if (!PyArg_ParseTuple(args, "K", &tcc_state))
+	unsigned long long tmp = 0;
+
+	if (!PyArg_ParseTuple(args, "K", &tmp))
 		return NULL;
-	tcc_delete(tcc_state);
+
+	tcc_delete((TCCState *) (intptr_t) tmp);
 
 	Py_INCREF(Py_None);
 	return Py_None;
@@ -124,23 +126,57 @@ typedef struct {
 	uint64_t address;
 } block_id;
 
+typedef int (*jitted_func)(block_id*, PyObject*);
+
 
 PyObject* tcc_exec_bloc(PyObject* self, PyObject* args)
 {
-	void (*func)(block_id*, PyObject*);
+	jitted_func func;
 	PyObject* jitcpu;
-	block_id BlockDst = {0, 0};
+	PyObject* func_py;
+	PyObject* lbl2ptr;
+	PyObject* breakpoints;
+	PyObject* retaddr = NULL;
+	int status;
+	block_id BlockDst;
 
-	if (!PyArg_ParseTuple(args, "KO", &func, &jitcpu))
+	if (!PyArg_ParseTuple(args, "OOOO", &retaddr, &jitcpu, &lbl2ptr, &breakpoints))
 		return NULL;
-	func(&BlockDst, jitcpu);
 
-	if (BlockDst.is_local == 1) {
-		fprintf(stderr, "return on local label!\n");
-		exit(1);
+	/* The loop will decref retaddr always once */
+	Py_INCREF(retaddr);
+
+	for (;;) {
+		// Init
+		BlockDst.is_local = 0;
+		BlockDst.address = 0;
+
+		// Get the expected jitted function address
+		func_py = PyDict_GetItem(lbl2ptr, retaddr);
+		if (func_py)
+			func = (jitted_func) PyInt_AsLong((PyObject*) func_py);
+		else {
+			if (BlockDst.is_local == 1) {
+				fprintf(stderr, "return on local label!\n");
+				exit(1);
+			}
+			// retaddr is not jitted yet
+			return retaddr;
+		}
+
+		// Execute it
+		status = func(&BlockDst, jitcpu);
+		Py_DECREF(retaddr);
+		retaddr = PyLong_FromUnsignedLongLong(BlockDst.address);
+
+		// Check exception
+		if (status)
+			return retaddr;
+
+		// Check breakpoint
+		if (PyDict_Contains(breakpoints, retaddr))
+			return retaddr;
 	}
-
-	return PyLong_FromUnsignedLongLong(BlockDst.address);
 }
 
 PyObject* tcc_compil(PyObject* self, PyObject* args)
@@ -180,8 +216,8 @@ PyObject* tcc_compil(PyObject* self, PyObject* args)
 		exit(1);
 	}
 
-	PyTuple_SetItem(ret, 0, PyLong_FromUnsignedLongLong((uint64_t)tcc_state));
-	PyTuple_SetItem(ret, 1, PyLong_FromUnsignedLongLong((uint64_t)entry));
+	PyTuple_SetItem(ret, 0, PyLong_FromUnsignedLongLong((intptr_t) tcc_state));
+	PyTuple_SetItem(ret, 1, PyLong_FromUnsignedLongLong((intptr_t) entry));
 
 	return ret;
 
@@ -209,8 +245,8 @@ PyObject* tcc_loop_exec(PyObject* self, PyObject* args)
 		}
 
 		pArgs = PyTuple_New(2);
-		PyTuple_SetItem(pArgs, 0, PyLong_FromUnsignedLongLong((uint64_t)cpu));
-		PyTuple_SetItem(pArgs, 1, PyLong_FromUnsignedLongLong((uint64_t)vm));
+		PyTuple_SetItem(pArgs, 0, PyLong_FromUnsignedLongLong((intptr_t)cpu));
+		PyTuple_SetItem(pArgs, 1, PyLong_FromUnsignedLongLong((intptr_t)vm));
 		ret = PyObject_CallObject(func, pArgs);
 		Py_DECREF(2);
 

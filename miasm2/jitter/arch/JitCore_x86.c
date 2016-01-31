@@ -45,6 +45,18 @@ reg_dict gpreg_dict[] = { {.name = "RAX", .offset = offsetof(vm_cpu_t, RAX)},
 			  {.name = "FS", .offset = offsetof(vm_cpu_t, FS)},
 			  {.name = "GS", .offset = offsetof(vm_cpu_t, GS)},
 
+			  {.name = "MM0", .offset = offsetof(vm_cpu_t, MM0)},
+			  {.name = "MM1", .offset = offsetof(vm_cpu_t, MM1)},
+			  {.name = "MM2", .offset = offsetof(vm_cpu_t, MM2)},
+			  {.name = "MM3", .offset = offsetof(vm_cpu_t, MM3)},
+			  {.name = "MM4", .offset = offsetof(vm_cpu_t, MM4)},
+			  {.name = "MM5", .offset = offsetof(vm_cpu_t, MM5)},
+			  {.name = "MM6", .offset = offsetof(vm_cpu_t, MM6)},
+			  {.name = "MM7", .offset = offsetof(vm_cpu_t, MM7)},
+
+			  {.name = "TSC1", .offset = offsetof(vm_cpu_t, tsc1)},
+			  {.name = "TSC2", .offset = offsetof(vm_cpu_t, tsc2)},
+
 };
 
 
@@ -95,6 +107,18 @@ PyObject* cpu_get_gpreg(JitCpu* self)
     get_reg(DS);
     get_reg(FS);
     get_reg(GS);
+
+    get_reg(MM0);
+    get_reg(MM1);
+    get_reg(MM2);
+    get_reg(MM3);
+    get_reg(MM4);
+    get_reg(MM5);
+    get_reg(MM6);
+    get_reg(MM7);
+
+    get_reg(tsc1);
+    get_reg(tsc2);
 
     return dict;
 }
@@ -197,9 +221,25 @@ PyObject* cpu_get_exception(JitCpu* self, PyObject* args)
 	return PyLong_FromUnsignedLongLong((uint64_t)(((vm_cpu_t*)self->cpu)->exception_flags));
 }
 
+PyObject* cpu_set_interrupt_num(JitCpu* self, PyObject* args)
+{
+	PyObject *item1;
+	uint64_t i;
 
+	if (!PyArg_ParseTuple(args, "O", &item1))
+		return NULL;
 
+	PyGetInt(item1, i);
 
+	((vm_cpu_t*)self->cpu)->interrupt_num = i;
+	Py_INCREF(Py_None);
+	return Py_None;
+}
+
+PyObject* cpu_get_interrupt_num(JitCpu* self, PyObject* args)
+{
+	return PyLong_FromUnsignedLongLong((uint64_t)(((vm_cpu_t*)self->cpu)->interrupt_num));
+}
 
 PyObject* cpu_set_segm_base(JitCpu* self, PyObject* args)
 {
@@ -349,6 +389,10 @@ static PyMethodDef JitCpu_methods[] = {
 	 "X"},
 	{"get_mem", (PyCFunction)vm_get_mem, METH_VARARGS,
 	 "X"},
+	{"get_interrupt_num", (PyCFunction)cpu_get_interrupt_num, METH_VARARGS,
+	 "X"},
+	{"set_interrupt_num", (PyCFunction)cpu_set_interrupt_num, METH_VARARGS,
+	 "X"},
 	{NULL}  /* Sentinel */
 };
 
@@ -454,6 +498,18 @@ getset_reg_R_u16(SP);
 getset_reg_R_u16(BP);
 
 getset_reg_R_u16(IP);
+
+getset_reg_u64(MM0);
+getset_reg_u64(MM1);
+getset_reg_u64(MM2);
+getset_reg_u64(MM3);
+getset_reg_u64(MM4);
+getset_reg_u64(MM5);
+getset_reg_u64(MM6);
+getset_reg_u64(MM7);
+
+getset_reg_u32(tsc1);
+getset_reg_u32(tsc2);
 
 
 PyObject* get_gpreg_offset_all(void)
@@ -662,6 +718,12 @@ PyObject* get_gpreg_offset_all(void)
     get_reg_off(MM5_new);
     get_reg_off(MM6_new);
     get_reg_off(MM7_new);
+
+    get_reg_off(tsc1);
+    get_reg_off(tsc2);
+    get_reg_off(tsc1_new);
+    get_reg_off(tsc2_new);
+
     return dict;
 }
 
@@ -729,6 +791,18 @@ static PyGetSetDef JitCpu_getseters[] = {
     {"BP", (getter)JitCpu_get_BP, (setter)JitCpu_set_BP, "BP", NULL},
 
     {"IP", (getter)JitCpu_get_IP, (setter)JitCpu_set_IP, "IP", NULL},
+
+    {"MM0", (getter)JitCpu_get_MM0, (setter)JitCpu_set_MM0, "MM0", NULL},
+    {"MM1", (getter)JitCpu_get_MM1, (setter)JitCpu_set_MM1, "MM1", NULL},
+    {"MM2", (getter)JitCpu_get_MM2, (setter)JitCpu_set_MM2, "MM2", NULL},
+    {"MM3", (getter)JitCpu_get_MM3, (setter)JitCpu_set_MM3, "MM3", NULL},
+    {"MM4", (getter)JitCpu_get_MM4, (setter)JitCpu_set_MM4, "MM4", NULL},
+    {"MM5", (getter)JitCpu_get_MM5, (setter)JitCpu_set_MM5, "MM5", NULL},
+    {"MM6", (getter)JitCpu_get_MM6, (setter)JitCpu_set_MM6, "MM6", NULL},
+    {"MM7", (getter)JitCpu_get_MM7, (setter)JitCpu_set_MM7, "MM7", NULL},
+
+    {"TSC1", (getter)JitCpu_get_tsc1, (setter)JitCpu_set_tsc1, "TSC1", NULL},
+    {"TSC2", (getter)JitCpu_get_tsc2, (setter)JitCpu_set_tsc2, "TSC2", NULL},
 
 
     {NULL}  /* Sentinel */

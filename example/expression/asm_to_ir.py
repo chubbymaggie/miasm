@@ -1,10 +1,10 @@
-from miasm2.core.cpu import parse_ast, ast_id2expr
-from miasm2.arch.x86.arch import mn_x86, base_expr
+from pdb import pm
+
+from miasm2.arch.x86.arch import mn_x86
 from miasm2.core import parse_asm
 from miasm2.expression.expression import *
 from miasm2.core import asmbloc
 from miasm2.arch.x86.ira import ir_a_x86_32
-from pdb import pm
 
 
 # First, asm code
@@ -23,7 +23,6 @@ loop:
    RET
 ''')
 
-blocs = blocs[0]
 
 symbol_pool.set_offset(symbol_pool.getby_name("main"), 0x0)
 for b in blocs:
@@ -46,13 +45,10 @@ for lbl, b in ir_arch.blocs.items():
     print b
 
 # Dead propagation
-ir_arch.gen_graph()
-out = ir_arch.graph()
-open('graph.txt', 'w').write(out)
+open('graph.dot', 'w').write(ir_arch.graph.dot())
 print '*' * 80
 ir_arch.dead_simp()
-out2 = ir_arch.graph()
-open('graph2.txt', 'w').write(out2)
+open('graph2.dot', 'w').write(ir_arch.graph.dot())
 
 # Display new IR
 print 'new ir blocs'

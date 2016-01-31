@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 from pdb import pm
 
 from miasm2.analysis.binary import Container
-from miasm2.core.asmbloc import log_asmbloc, asm_label, bloc2graph
+from miasm2.core.asmbloc import log_asmbloc, asm_label, AsmCFG
 from miasm2.expression.expression import ExprId
 from miasm2.core.interval import interval
 from miasm2.analysis.machine import Machine
@@ -43,7 +43,8 @@ parser.add_argument('-l', "--dontdis-retcall", action="store_true",
                     help="If set, disassemble only call destinations")
 parser.add_argument('-s', "--simplify", action="store_true",
                     help="Use the liveness analysis pass")
-parser.add_argument('-o', "--shiftoffset", default=None, type=int,
+parser.add_argument('-o', "--shiftoffset", default=None,
+                    type=lambda x: int(x, 0),
                     help="Shift input binary by an offset")
 parser.add_argument('-a', "--try-disasm-all", action="store_true",
                     help="Try to disassemble the whole binary")
@@ -85,7 +86,7 @@ mdis.dont_dis_nulstart_bloc = not args.dis_nulstart_block
 mdis.follow_call = args.followcall
 
 todo = []
-addrs = [int(a, 16) for a in args.address]
+addrs = [int(a, 0) for a in args.address]
 
 if len(addrs) == 0 and default_addr is not None:
     addrs.append(default_addr)
@@ -141,15 +142,13 @@ while not finish and todo:
 
 
 # Generate dotty graph
-all_blocs = []
+all_blocs = AsmCFG()
 for blocs in all_funcs_blocs.values():
     all_blocs += blocs
-    # for b in blocs:
-    #    print b
+
 
 log.info('generate graph file')
-g = bloc2graph(all_blocs, True)
-open('graph_execflow.txt', 'w').write(g)
+open('graph_execflow.dot', 'w').write(all_blocs.dot(offset=True))
 
 log.info('generate intervals')
 
@@ -166,7 +165,7 @@ for i, j in done_interval.intervals:
 
 
 all_lines.sort(key=lambda x: x.offset)
-open('lines.txt', 'w').write('\n'.join([str(l) for l in all_lines]))
+open('lines.dot', 'w').write('\n'.join([str(l) for l in all_lines]))
 log.info('total lines %s' % total_l)
 
 
@@ -193,10 +192,11 @@ if args.gen_ir:
     log.info("Print blocs (with analyse)")
     for label, bloc in ir_arch_a.blocs.iteritems():
         print bloc
-    ir_arch_a.gen_graph()
 
     if args.simplify:
         ir_arch_a.dead_simp()
 
-    out = ir_arch_a.graph()
-    open('graph_irflow.txt', 'w').write(out)
+    out = ir_arch_a.graph.dot()
+    open('graph_irflow.dot', 'w').write(out)
+    out = ir_arch.graph.dot()
+    open('graph_irflow_raw.dot', 'w').write(out)

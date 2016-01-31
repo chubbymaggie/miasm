@@ -192,3 +192,96 @@ assert(sccs == {frozenset({6}),
                 frozenset({7, 8}),
                 frozenset({3}),
                 frozenset({1, 2, 4, 5, 9})})
+
+# Equality
+graph = DiGraph()
+graph.add_edge(1, 2)
+graph.add_edge(2, 3)
+graph2 = DiGraph()
+graph2.add_edge(2, 3)
+graph2.add_edge(1, 2)
+assert graph == graph2
+
+# Copy
+graph4 = graph.copy()
+assert graph == graph4
+
+# Merge
+graph3 = DiGraph()
+graph3.add_edge(3, 1)
+graph3.add_edge(1, 4)
+graph4 += graph3
+for node in graph3.nodes():
+    assert node in graph4.nodes()
+for edge in graph3.edges():
+    assert edge in graph4.edges()
+assert graph4.nodes() == graph.nodes().union(graph3.nodes())
+assert sorted(graph4.edges()) == sorted(graph.edges() + graph3.edges())
+
+# MatchGraph
+
+## Build a MatchGraph using MatchGraphJoker
+j1 = MatchGraphJoker(name="dad")
+j2 = MatchGraphJoker(name="son")
+### Check '>>' helper
+matcher = j1 >> j2 >> j1
+### Check __str__
+print matcher
+### Ensure form
+assert isinstance(matcher, MatchGraph)
+assert len(matcher.nodes()) == 2
+assert len(matcher.edges()) == 2
+
+## Match a simple graph
+graph = DiGraph()
+graph.add_edge(1, 2)
+graph.add_edge(2, 1)
+graph.add_edge(2, 3)
+sols = list(matcher.match(graph))
+assert len(sols) == 0
+
+## Modify restrictions
+j2 = MatchGraphJoker(name="son", restrict_out=False)
+matcher = j1 >> j2 >> j1
+sols = list(matcher.match(graph))
+assert len(sols) == 1
+assert sols[0] == {j1: 1,
+                   j2: 2}
+
+## Check solution combinaison (ie a -> b and b -> a)
+j1 = MatchGraphJoker(name="dad", restrict_out=False)
+matcher = j1 >> j2 >> j1
+sols = list(matcher.match(graph))
+assert len(sols) == 2
+assert len([sol for sol in sols if sol[j1] == 1]) == 1
+assert len([sol for sol in sols if sol[j1] == 2]) == 1
+
+## Check filter
+j2 = MatchGraphJoker(name="son", restrict_out=False, filt=lambda node: node < 2)
+matcher = j1 >> j2 >> j1
+sols = list(matcher.match(graph))
+assert len(sols) == 1
+assert sols[0] == {j1: 2,
+                   j2: 1}
+
+## Check building with 'add' helper
+j1 = MatchGraphJoker(name="dad")
+j2 = MatchGraphJoker(name="son")
+j3 = MatchGraphJoker(name="sonson", restrict_in=False)
+matcher = j1 >> j2
+matcher += j2 >> j3
+assert isinstance(matcher, MatchGraph)
+assert len(matcher.nodes()) == 3
+assert len(matcher.edges()) == 2
+
+## Check restrict_in
+graph = DiGraph()
+graph.add_edge(1, 2)
+graph.add_edge(2, 3)
+graph.add_edge(4, 3)
+sols = list(matcher.match(graph))
+assert len(sols) == 1
+assert sols[0] == {j1: 1,
+                   j2: 2,
+                   j3: 3}
+

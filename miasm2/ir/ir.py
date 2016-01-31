@@ -22,22 +22,24 @@
 
 import miasm2.expression.expression as m2_expr
 from miasm2.expression.expression_helper import get_missing_interval
-from miasm2.core import asmbloc
 from miasm2.expression.simplifications import expr_simp
-from miasm2.core.asmbloc import asm_symbol_pool
+from miasm2.core.asmbloc import asm_symbol_pool, expr_is_label, asm_label, \
+    asm_bloc
+from miasm2.core.graph import DiGraph
 
 
 class irbloc(object):
 
-    def __init__(self, label, irs, lines = []):
-        assert(isinstance(label, asmbloc.asm_label))
+    def __init__(self, label, irs, lines=None):
+        assert(isinstance(label, asm_label))
+        if lines is None:
+            lines = []
         self.label = label
         self.irs = irs
         self.lines = lines
         self.except_automod = True
         self._dst = None
         self._dst_linenb = None
-
 
     def _get_dst(self):
         """Find the IRDst affectation and update dst, dst_linenb accordingly"""
@@ -119,6 +121,62 @@ class irbloc(object):
         return "\n".join(o)
 
 
+class DiGraphIR(DiGraph):
+
+    """DiGraph for IR instances"""
+
+    def __init__(self, blocks, *args, **kwargs):
+        """Instanciate a DiGraphIR
+        @blocks: IR blocks
+        """
+        self._blocks = blocks
+        super(DiGraphIR, self).__init__(*args, **kwargs)
+
+    def node2lines(self, node):
+        yield self.DotCellDescription(text=str(node.name),
+                                      attr={'align': 'center',
+                                            'colspan': 2,
+                                            'bgcolor': 'grey'})
+        if node not in self._blocks:
+            yield [self.DotCellDescription(text="NOT PRESENT", attr={})]
+            raise StopIteration
+        for i, exprs in enumerate(self._blocks[node].irs):
+            for expr in exprs:
+                if self._dot_offset:
+                    yield [self.DotCellDescription(text="%-4d" % i, attr={}),
+                           self.DotCellDescription(text=str(expr), attr={})]
+                else:
+                    yield self.DotCellDescription(text=str(expr), attr={})
+            yield self.DotCellDescription(text="", attr={})
+
+    def edge_attr(self, src, dst):
+        if src not in self._blocks or dst not in self._blocks:
+            return {}
+        src_irdst = self._blocks[src].dst
+        edge_color = "blue"
+        if isinstance(src_irdst, m2_expr.ExprCond):
+            if (expr_is_label(src_irdst.src1) and
+                    src_irdst.src1.name == dst):
+                edge_color = "limegreen"
+            elif (expr_is_label(src_irdst.src2) and
+                  src_irdst.src2.name == dst):
+                edge_color = "red"
+        return {"color": edge_color}
+
+    def node_attr(self, node):
+        if node not in self._blocks:
+            return {'style': 'filled', 'fillcolor': 'red'}
+        return {}
+
+    def dot(self, offset=False):
+        """
+        @offset: (optional) if set, add the corresponding line number in each
+        node
+        """
+        self._dot_offset = offset
+        return super(DiGraphIR, self).dot()
+
+
 class ir(object):
 
     def __init__(self, arch, attrib, symbol_pool=None):
@@ -130,6 +188,8 @@ class ir(object):
         self.sp = arch.getsp(attrib)
         self.arch = arch
         self.attrib = attrib
+        # Lazy structure
+        self._graph = None
 
     def instr2ir(self, l):
         ir_bloc_cur, ir_blocs_extra = self.get_ir(l)
@@ -140,13 +200,13 @@ class ir(object):
         @ad: an ExprId/ExprInt/label/int"""
 
         if (isinstance(ad, m2_expr.ExprId) and
-            isinstance(ad.name, asmbloc.asm_label)):
+                isinstance(ad.name, asm_label)):
             ad = ad.name
         if isinstance(ad, m2_expr.ExprInt):
             ad = int(ad.arg)
         if type(ad) in [int, long]:
             ad = self.symbol_pool.getby_offset_create(ad)
-        elif isinstance(ad, asmbloc.asm_label):
+        elif isinstance(ad, asm_label):
             ad = self.symbol_pool.getby_name_create(ad.name)
         return ad
 
@@ -157,8 +217,8 @@ class ir(object):
         label = self.get_label(ad)
         return self.blocs.get(label, None)
 
-    def add_instr(self, l, ad=0, gen_pc_updt = False):
-        b = asmbloc.asm_bloc(l)
+    def add_instr(self, l, ad=0, gen_pc_updt=False):
+        b = asm_bloc(self.gen_label())
         b.lines = [l]
         self.add_bloc(b, gen_pc_updt)
 
@@ -218,7 +278,6 @@ class ir(object):
             # Add the merged one
             affect_list.append(m2_expr.ExprAff(dst, final_dst))
 
-
     def getby_offset(self, offset):
         out = set()
         for irb in self.blocs.values():
@@ -232,7 +291,7 @@ class ir(object):
                                                                     l.offset))])
         c.lines.append(l)
 
-    def add_bloc(self, bloc, gen_pc_updt = False):
+    def add_bloc(self, bloc, gen_pc_updt=False):
         c = None
         ir_blocs_all = []
         for l in bloc.lines:
@@ -247,7 +306,6 @@ class ir(object):
 
             c.irs.append(ir_bloc_cur)
             c.lines.append(l)
-
 
             if ir_blocs_extra:
                 for b in ir_blocs_extra:
@@ -299,6 +357,8 @@ class ir(object):
 
             self.blocs[irb.label] = irb
 
+        # Forget graph if any
+        self._graph = None
 
     def get_instr_label(self, instr):
         """Returns the label associated to an instruction
@@ -326,14 +386,80 @@ class ir(object):
             for i, l in enumerate(irs):
                 irs[i] = l.replace_expr(rep)
 
-    def get_rw(self, regs_ids = []):
+    def get_rw(self, regs_ids=None):
         """
         Calls get_rw(irb) for each bloc
         @regs_ids : ids of registers used in IR
         """
+        if regs_ids is None:
+            regs_ids = []
         for b in self.blocs.values():
             b.get_rw(regs_ids)
 
-    def ExprIsLabel(self, l):
-        return isinstance(l, m2_expr.ExprId) and isinstance(l.name,
-                                                            asmbloc.asm_label)
+    def sort_dst(self, todo, done):
+        out = set()
+        while todo:
+            dst = todo.pop()
+            if expr_is_label(dst):
+                done.add(dst)
+            elif isinstance(dst, m2_expr.ExprMem) or isinstance(dst, m2_expr.ExprInt):
+                done.add(dst)
+            elif isinstance(dst, m2_expr.ExprCond):
+                todo.add(dst.src1)
+                todo.add(dst.src2)
+            elif isinstance(dst, m2_expr.ExprId):
+                out.add(dst)
+            else:
+                done.add(dst)
+        return out
+
+    def dst_trackback(self, b):
+        dst = b.dst
+        todo = set([dst])
+        done = set()
+
+        for irs in reversed(b.irs):
+            if len(todo) == 0:
+                break
+            out = self.sort_dst(todo, done)
+            found = set()
+            follow = set()
+            for i in irs:
+                if not out:
+                    break
+                for o in out:
+                    if i.dst == o:
+                        follow.add(i.src)
+                        found.add(o)
+                for o in found:
+                    out.remove(o)
+
+            for o in out:
+                if o not in found:
+                    follow.add(o)
+            todo = follow
+
+        return done
+
+    def _gen_graph(self):
+        """
+        Gen irbloc digraph
+        """
+        self._graph = DiGraphIR(self.blocs)
+        for lbl, b in self.blocs.iteritems():
+            self._graph.add_node(lbl)
+            dst = self.dst_trackback(b)
+            for d in dst:
+                if isinstance(d, m2_expr.ExprInt):
+                    d = m2_expr.ExprId(
+                        self.symbol_pool.getby_offset_create(int(d.arg)))
+                if expr_is_label(d):
+                    self._graph.add_edge(lbl, d.name)
+
+    @property
+    def graph(self):
+        """Get a DiGraph representation of current IR instance.
+        Lazy property, building the graph on-demand"""
+        if self._graph is None:
+            self._gen_graph()
+        return self._graph

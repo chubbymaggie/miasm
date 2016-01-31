@@ -3,20 +3,22 @@
 
 import logging
 import inspect
-
+from collections import namedtuple
 
 import miasm2.expression.expression as m2_expr
 from miasm2.expression.simplifications import expr_simp
 from miasm2.expression.modint import moduint, modint
 from miasm2.core.utils import Disasm_Exception, pck
-from miasm2.core.graph import DiGraph
+from miasm2.core.graph import DiGraph, DiGraphSimplifier, MatchGraphJoker
 from miasm2.core.interval import interval
+
 
 log_asmbloc = logging.getLogger("asmblock")
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter("%(levelname)-5s: %(message)s"))
 log_asmbloc.addHandler(console_handler)
 log_asmbloc.setLevel(logging.WARNING)
+
 
 def is_int(a):
     return isinstance(a, int) or isinstance(a, long) or \
@@ -33,6 +35,7 @@ def expr_is_int_or_label(e):
 
 
 class asm_label:
+
     "Stand for an assembly label"
 
     def __init__(self, name="", offset=None):
@@ -59,19 +62,24 @@ class asm_label:
         rep += '>'
         return rep
 
+
 class asm_raw:
+
     def __init__(self, raw=""):
         self.raw = raw
 
     def __str__(self):
         return repr(self.raw)
 
+
 class asm_constraint(object):
     c_to = "c_to"
     c_next = "c_next"
-    c_bad = "c_bad"
 
-    def __init__(self, label=None, c_t=c_to):
+    def __init__(self, label, c_t=c_to):
+        # Sanity check
+        assert isinstance(label, asm_label)
+
         self.label = label
         self.c_t = c_t
 
@@ -81,28 +89,22 @@ class asm_constraint(object):
 
 class asm_constraint_next(asm_constraint):
 
-    def __init__(self, label=None):
+    def __init__(self, label):
         super(asm_constraint_next, self).__init__(
             label, c_t=asm_constraint.c_next)
 
 
 class asm_constraint_to(asm_constraint):
 
-    def __init__(self, label=None):
+    def __init__(self, label):
         super(asm_constraint_to, self).__init__(
             label, c_t=asm_constraint.c_to)
 
 
-class asm_constraint_bad(asm_constraint):
-
-    def __init__(self, label=None):
-        super(asm_constraint_bad, self).__init__(
-            label, c_t=asm_constraint.c_bad)
-
-
 class asm_bloc(object):
 
-    def __init__(self, label=None, alignment=1):
+    def __init__(self, label, alignment=1):
+        assert isinstance(label, asm_label)
         self.bto = set()
         self.lines = []
         self.label = label
@@ -128,7 +130,7 @@ class asm_bloc(object):
         self.lines.append(l)
 
     def addto(self, c):
-        assert type(self.bto) is set
+        assert isinstance(self.bto, set)
         self.bto.add(c)
 
     def split(self, offset, l):
@@ -164,8 +166,10 @@ class asm_bloc(object):
         return new_bloc
 
     def get_range(self):
+        """Returns the offset hull of an asm_bloc"""
         if len(self.lines):
-            return self.lines[0].offset, self.lines[-1].offset
+            return (self.lines[0].offset,
+                    self.lines[-1].offset + self.lines[-1].l)
         else:
             return 0, 0
 
@@ -173,9 +177,9 @@ class asm_bloc(object):
         return [x.offset for x in self.lines]
 
     def add_cst(self, offset, c_t, symbol_pool):
-        if type(offset) in [int, long]:
+        if isinstance(offset, (int, long)):
             l = symbol_pool.getby_offset_create(offset)
-        elif type(offset) is str:
+        elif isinstance(offset, str):
             l = symbol_pool.getby_name_create(offset)
         elif isinstance(offset, asm_label):
             l = offset
@@ -194,20 +198,92 @@ class asm_bloc(object):
             if l.splitflow() or l.breakflow():
                 raise NotImplementedError('not fully functional')
 
-
     def get_subcall_instr(self):
         if not self.lines:
             return None
-        for i in xrange(-1, -1 - self.lines[0].delayslot - 1, -1):
+        delayslot = self.lines[0].delayslot
+        end_index = len(self.lines) - 1
+        ds_max_index = max(end_index - delayslot, 0)
+        for i in xrange(end_index, ds_max_index - 1, -1):
             l = self.lines[i]
             if l.is_subcall():
                 return l
+        return None
 
     def get_next(self):
         for x in self.bto:
             if x.c_t == asm_constraint.c_next:
                 return x.label
         return None
+
+    @staticmethod
+    def _filter_constraint(constraints):
+        """Sort and filter @constraints for asm_bloc.bto
+        @constraints: non-empty set of asm_constraint instance
+
+        Always the same type -> one of the constraint
+        c_next and c_to -> c_next
+        """
+        # Only one constraint
+        if len(constraints) == 1:
+            return next(iter(constraints))
+
+        # Constraint type -> set of corresponding constraint
+        cbytype = {}
+        for cons in constraints:
+            cbytype.setdefault(cons.c_t, set()).add(cons)
+
+        # Only one type -> any constraint is OK
+        if len(cbytype) == 1:
+            return next(iter(constraints))
+
+        # At least 2 types -> types = {c_next, c_to}
+        # c_to is included in c_next
+        return next(iter(cbytype[asm_constraint.c_next]))
+
+    def fix_constraints(self):
+        """Fix next block constraints"""
+        # destination -> associated constraints
+        dests = {}
+        for constraint in self.bto:
+            dests.setdefault(constraint.label, set()).add(constraint)
+
+        self.bto = set(self._filter_constraint(constraints)
+                       for constraints in dests.itervalues())
+
+
+class asm_block_bad(asm_bloc):
+
+    """Stand for a *bad* ASM block (malformed, unreachable,
+    not disassembled, ...)"""
+
+    ERROR_TYPES = {-1: "Unknown error",
+                   0: "Unable to disassemble",
+                   1: "Null starting block",
+                   2: "Address forbidden by dont_dis",
+                   }
+
+    def __init__(self, label=None, alignment=1, errno=-1, *args, **kwargs):
+        """Instanciate an asm_block_bad.
+        @label, @alignement: same as asm_bloc.__init__
+        @errno: (optional) specify a error type associated with the block
+        """
+        super(asm_block_bad, self).__init__(label, alignment, *args, **kwargs)
+        self._errno = errno
+
+    def __str__(self):
+        error_txt = self.ERROR_TYPES.get(self._errno, self._errno)
+        return "\n".join([str(self.label),
+                          "\tBad block: %s" % error_txt])
+
+    def addline(self, *args, **kwargs):
+        raise RuntimeError("An asm_block_bad cannot have line")
+
+    def addto(self, *args, **kwargs):
+        raise RuntimeError("An asm_block_bad cannot have bto")
+
+    def split(self, *args, **kwargs):
+        raise RuntimeError("An asm_block_bad cannot be splitted")
 
 
 class asm_symbol_pool:
@@ -228,11 +304,11 @@ class asm_symbol_pool:
 
         # Test for collisions
         if (label.offset in self._offset2label and
-            label != self._offset2label[label.offset]):
+                label != self._offset2label[label.offset]):
             raise ValueError('symbol %s has same offset as %s' %
                              (label, self._offset2label[label.offset]))
         if (label.name in self._name2label and
-            label != self._name2label[label.name]):
+                label != self._name2label[label.name]):
             raise ValueError('symbol %s has same name as %s' %
                              (label, self._name2label[label.name]))
 
@@ -334,24 +410,41 @@ class asm_symbol_pool:
         return label
 
 
-def dis_bloc(mnemo, pool_bin, cur_bloc, offset, job_done, symbol_pool,
-             dont_dis=[], split_dis=[
-             ], follow_call=False, dontdis_retcall=False, lines_wd=None,
-             dis_bloc_callback=None, dont_dis_nulstart_bloc=False,
-             attrib={}):
+def dis_bloc(mnemo, pool_bin, label, offset, job_done, symbol_pool,
+             dont_dis=None, split_dis=None, follow_call=False,
+             dontdis_retcall=False, lines_wd=None, dis_bloc_callback=None,
+             dont_dis_nulstart_bloc=False, attrib=None):
     # pool_bin.offset = offset
+    if dont_dis is None:
+        dont_dis = []
+    if split_dis is None:
+        split_dis = []
+    if attrib is None:
+        attrib = {}
     lines_cpt = 0
     in_delayslot = False
     delayslot_count = mnemo.delayslot
     offsets_to_dis = set()
     add_next_offset = False
+    cur_block = asm_bloc(label)
     log_asmbloc.debug("dis at %X", int(offset))
     while not in_delayslot or delayslot_count > 0:
         if in_delayslot:
             delayslot_count -= 1
 
-        if offset in dont_dis or (lines_cpt > 0 and offset in split_dis):
-            cur_bloc.add_cst(offset, asm_constraint.c_next, symbol_pool)
+        if offset in dont_dis:
+            if not cur_block.lines:
+                job_done.add(offset)
+                # Block is empty -> bad block
+                cur_block = asm_block_bad(label, errno=2)
+            else:
+                # Block is not empty, stop the desassembly pass and add a
+                # constraint to the next block
+                cur_block.add_cst(offset, asm_constraint.c_next, symbol_pool)
+            break
+
+        if lines_cpt > 0 and offset in split_dis:
+            cur_block.add_cst(offset, asm_constraint.c_next, symbol_pool)
             offsets_to_dis.add(offset)
             break
 
@@ -361,12 +454,11 @@ def dis_bloc(mnemo, pool_bin, cur_bloc, offset, job_done, symbol_pool,
             break
 
         if offset in job_done:
-            cur_bloc.add_cst(offset, asm_constraint.c_next, symbol_pool)
+            cur_block.add_cst(offset, asm_constraint.c_next, symbol_pool)
             break
 
         off_i = offset
         try:
-            # print repr(pool_bin.getbytes(offset, 4))
             instr = mnemo.dis(pool_bin, attrib, offset)
         except (Disasm_Exception, IOError), e:
             log_asmbloc.warning(e)
@@ -374,13 +466,26 @@ def dis_bloc(mnemo, pool_bin, cur_bloc, offset, job_done, symbol_pool,
 
         if instr is None:
             log_asmbloc.warning("cannot disasm at %X", int(off_i))
-            cur_bloc.add_cst(off_i, asm_constraint.c_bad, symbol_pool)
+            if not cur_block.lines:
+                job_done.add(offset)
+                # Block is empty -> bad block
+                cur_block = asm_block_bad(label, errno=0)
+            else:
+                # Block is not empty, stop the desassembly pass and add a
+                # constraint to the next block
+                cur_block.add_cst(off_i, asm_constraint.c_next, symbol_pool)
             break
 
         # XXX TODO nul start block option
         if dont_dis_nulstart_bloc and instr.b.count('\x00') == instr.l:
             log_asmbloc.warning("reach nul instr at %X", int(off_i))
-            cur_bloc.add_cst(off_i, asm_constraint.c_bad, symbol_pool)
+            if not cur_block.lines:
+                # Block is empty -> bad block
+                cur_block = asm_block_bad(label, errno=1)
+            else:
+                # Block is not empty, stop the desassembly pass and add a
+                # constraint to the next block
+                cur_block.add_cst(off_i, asm_constraint.c_next, symbol_pool)
             break
 
         # special case: flow graph modificator in delayslot
@@ -395,7 +500,7 @@ def dis_bloc(mnemo, pool_bin, cur_bloc, offset, job_done, symbol_pool,
         log_asmbloc.debug(instr)
         log_asmbloc.debug(instr.args)
 
-        cur_bloc.addline(instr)
+        cur_block.addline(instr)
         if not instr.breakflow():
             continue
         # test split
@@ -413,82 +518,45 @@ def dis_bloc(mnemo, pool_bin, cur_bloc, offset, job_done, symbol_pool,
                     dstn.append(d.name)
             dst = dstn
             if (not instr.is_subcall()) or follow_call:
-                cur_bloc.bto.update(
+                cur_block.bto.update(
                     [asm_constraint(x, asm_constraint.c_to) for x in dst])
 
         # get in delayslot mode
         in_delayslot = True
         delayslot_count = instr.delayslot
 
-    for c in cur_bloc.bto:
-        if c.c_t == asm_constraint.c_bad:
-            continue
-        if isinstance(c.label, asm_label):
-            offsets_to_dis.add(c.label.offset)
+    for c in cur_block.bto:
+        offsets_to_dis.add(c.label.offset)
 
     if add_next_offset:
-        cur_bloc.add_cst(offset, asm_constraint.c_next, symbol_pool)
+        cur_block.add_cst(offset, asm_constraint.c_next, symbol_pool)
         offsets_to_dis.add(offset)
 
+    # Fix multiple constraints
+    cur_block.fix_constraints()
+
     if dis_bloc_callback is not None:
-        dis_bloc_callback(
-            mnemo, attrib, pool_bin, cur_bloc, offsets_to_dis, symbol_pool)
+        dis_bloc_callback(mn=mnemo, attrib=attrib, pool_bin=pool_bin,
+                          cur_bloc=cur_block, offsets_to_dis=offsets_to_dis,
+                          symbol_pool=symbol_pool)
     # print 'dst', [hex(x) for x in offsets_to_dis]
-    return offsets_to_dis
+    return cur_block, offsets_to_dis
 
 
-def split_bloc(mnemo, attrib, pool_bin, blocs,
-    symbol_pool, more_ref=None, dis_bloc_callback=None):
-    if not more_ref:
-        more_ref = []
-
-    # get all possible dst
-    bloc_dst = [symbol_pool._offset2label[x] for x in more_ref]
-    for b in blocs:
-        for c in b.bto:
-            if not isinstance(c.label, asm_label):
-                continue
-            if c.c_t == asm_constraint.c_bad:
-                continue
-            bloc_dst.append(c.label)
-
-    bloc_dst = [x.offset for x in bloc_dst if x.offset is not None]
-
-    j = -1
-    while j < len(blocs) - 1:
-        j += 1
-        cb = blocs[j]
-        a, b = cb.get_range()
-
-        for off in bloc_dst:
-            if not (off > a and off <= b):
-                continue
-            l = symbol_pool.getby_offset_create(off)
-            new_b = cb.split(off, l)
-            log_asmbloc.debug("split bloc %x", off)
-            if new_b is None:
-                log_asmbloc.error("cannot split %x!!", off)
-                continue
-            if dis_bloc_callback:
-                offsets_to_dis = set(
-                    [x.label.offset for x in new_b.bto
-                    if isinstance(x.label, asm_label)])
-                dis_bloc_callback(
-                    mnemo, attrib, pool_bin, new_b, offsets_to_dis,
-                    symbol_pool)
-            blocs.append(new_b)
-            a, b = cb.get_range()
-
-    return blocs
-
-def dis_bloc_all(mnemo, pool_bin, offset, job_done, symbol_pool, dont_dis=[],
-                 split_dis=[], follow_call=False, dontdis_retcall=False,
+def dis_bloc_all(mnemo, pool_bin, offset, job_done, symbol_pool, dont_dis=None,
+                 split_dis=None, follow_call=False, dontdis_retcall=False,
                  blocs_wd=None, lines_wd=None, blocs=None,
                  dis_bloc_callback=None, dont_dis_nulstart_bloc=False,
-                 attrib={}):
+                 attrib=None):
     log_asmbloc.info("dis bloc all")
+    if dont_dis is None:
+        dont_dis = []
+    if split_dis is None:
+        split_dis = []
+    if attrib is None:
+        attrib = {}
     if blocs is None:
-        blocs = []
+        blocs = AsmCFG()
     todo = [offset]
 
     bloc_cpt = 0
@@ -503,72 +571,440 @@ def dis_bloc_all(mnemo, pool_bin, offset, job_done, symbol_pool, dont_dis=[],
             continue
         if n in job_done:
             continue
+        label = symbol_pool.getby_offset_create(n)
+        cur_block, nexts = dis_bloc(mnemo, pool_bin, label, n, job_done,
+                                    symbol_pool, dont_dis, split_dis,
+                                    follow_call, dontdis_retcall,
+                                    dis_bloc_callback=dis_bloc_callback,
+                                    lines_wd=lines_wd,
+                                    dont_dis_nulstart_bloc=dont_dis_nulstart_bloc,
+                                    attrib=attrib)
+        todo += nexts
+        blocs.add_node(cur_block)
 
-        if n in dont_dis:
-            continue
-        dd_flag = False
-        for dd in dont_dis:
-            if not isinstance(dd, tuple):
-                continue
-            dd_a, dd_b = dd
-            if dd_a <= n < dd_b:
-                dd_flag = True
-                break
-        if dd_flag:
-            continue
-        l = symbol_pool.getby_offset_create(n)
-        cur_bloc = asm_bloc(l)
-        todo += dis_bloc(mnemo, pool_bin, cur_bloc, n, job_done, symbol_pool,
-                         dont_dis, split_dis, follow_call, dontdis_retcall,
-                         dis_bloc_callback=dis_bloc_callback,
-                         lines_wd=lines_wd,
-                         dont_dis_nulstart_bloc=dont_dis_nulstart_bloc,
-                         attrib=attrib)
-        blocs.append(cur_bloc)
-
-    return split_bloc(mnemo, attrib, pool_bin, blocs,
-    symbol_pool, dis_bloc_callback=dis_bloc_callback)
+    blocs.apply_splitting(symbol_pool, dis_block_callback=dis_bloc_callback,
+                          mn=mnemo, attrib=attrib, pool_bin=pool_bin)
+    return blocs
 
 
-def bloc2graph(blocs, label=False, lines=True):
-    # rankdir=LR;
-    out = """
-digraph asm_graph {
-size="80,50";
-node [
-fontsize = "16",
-shape = "box"
-];
-"""
-    for b in blocs:
-        out += '%s [\n' % b.label.name
-        out += 'label = "'
+class AsmCFG(DiGraph):
 
-        out += b.label.name + "\\l\\\n"
-        if lines:
-            for l in b.lines:
-                if label:
-                    out += "%.8X " % l.offset
-                out += ("%s\\l\\\n" % l).replace('"', '\\"')
-        out += '"\n];\n'
+    """Directed graph standing for a ASM Control Flow Graph with:
+     - nodes: asm_bloc
+     - edges: constraints between blocks, synchronized with asm_bloc's "bto"
 
-    for b in blocs:
-        for n in b.bto:
-            # print 'xxxx', n.label, n.label.__class__
-            # if isinstance(n.label, ExprId):
-            #    print n.label.name, n.label.name.__class__
-            if isinstance(n.label, m2_expr.ExprId):
-                dst, name, cst = b.label.name, n.label.name, n.c_t
-                # out+='%s -> %s [ label = "%s" ];\n'%(b.label.name,
-                # n.label.name, n.c_t)
-            elif isinstance(n.label, asm_label):
-                dst, name, cst = b.label.name, n.label.name, n.c_t
+    Specialized the .dot export and force the relation between block to be uniq,
+    and associated with a constraint.
+
+    Offer helpers on AsmCFG management, such as research by label, sanity
+    checking and mnemonic size guessing.
+    """
+
+    # Internal structure for pending management
+    AsmCFGPending = namedtuple("AsmCFGPending",
+                               ["waiter", "constraint"])
+
+    def __init__(self, *args, **kwargs):
+        super(AsmCFG, self).__init__(*args, **kwargs)
+        # Edges -> constraint
+        self.edges2constraint = {}
+        # Expected asm_label -> set( (src, dst), constraint )
+        self._pendings = {}
+        # Label2block built on the fly
+        self._label2block = {}
+
+    # Compatibility with old list API
+    def append(self, *args, **kwargs):
+        raise DeprecationWarning("AsmCFG is a graph, use add_node")
+
+    def remove(self, *args, **kwargs):
+        raise DeprecationWarning("AsmCFG is a graph, use del_node")
+
+    def __getitem__(self, *args, **kwargs):
+        raise DeprecationWarning("Order of AsmCFG elements is not reliable")
+
+    def __iter__(self):
+        """Iterator on asm_bloc composing the current graph"""
+        return iter(self._nodes)
+
+    def __len__(self):
+        """Return the number of blocks in AsmCFG"""
+        return len(self._nodes)
+
+    # Manage graph with associated constraints
+    def add_edge(self, src, dst, constraint):
+        """Add an edge to the graph
+        @src: asm_bloc instance, source
+        @dst: asm_block instance, destination
+        @constraint: constraint associated to this edge
+        """
+        # Sanity check
+        assert (src, dst) not in self.edges2constraint
+
+        # Add the edge to src.bto if needed
+        if dst.label not in [cons.label for cons in src.bto]:
+            src.bto.add(asm_constraint(dst.label, constraint))
+
+        # Add edge
+        self.edges2constraint[(src, dst)] = constraint
+        super(AsmCFG, self).add_edge(src, dst)
+
+    def add_uniq_edge(self, src, dst, constraint):
+        """Add an edge from @src to @dst if it doesn't already exist"""
+        if (src not in self._nodes_succ or
+                dst not in self._nodes_succ[src]):
+            self.add_edge(src, dst, constraint)
+
+    def del_edge(self, src, dst):
+        """Delete the edge @src->@dst and its associated constraint"""
+        # Delete from src.bto
+        to_remove = [cons for cons in src.bto if cons.label == dst.label]
+        if to_remove:
+            assert len(to_remove) == 1
+            src.bto.remove(to_remove[0])
+
+        # Del edge
+        del self.edges2constraint[(src, dst)]
+        super(AsmCFG, self).del_edge(src, dst)
+
+    def add_node(self, block):
+        """Add the block @block to the current instance, if it is not already in
+        @block: asm_bloc instance
+
+        Edges will be created for @block.bto, if destinations are already in
+        this instance. If not, they will be resolved when adding these
+        aforementionned destinations.
+        `self.pendings` indicates which blocks are not yet resolved.
+        """
+        status = super(AsmCFG, self).add_node(block)
+        if not status:
+            return status
+
+        # Update waiters
+        if block.label in self._pendings:
+            for bblpend in self._pendings[block.label]:
+                self.add_edge(bblpend.waiter, block, bblpend.constraint)
+            del self._pendings[block.label]
+
+        # Synchronize edges with block destinations
+        self._label2block[block.label] = block
+        for constraint in block.bto:
+            dst = self._label2block.get(constraint.label,
+                                        None)
+            if dst is None:
+                # Block is yet unknown, add it to pendings
+                to_add = self.AsmCFGPending(waiter=block,
+                                            constraint=constraint.c_t)
+                self._pendings.setdefault(constraint.label,
+                                          set()).add(to_add)
             else:
-                continue
-            out += '%s -> %s [ label = "%s" ];\n' % (dst, name, cst)
+                # Block is already in known nodes
+                self.add_edge(block, dst, constraint.c_t)
 
-    out += "}"
-    return out
+        return status
+
+    def del_node(self, block):
+        super(AsmCFG, self).del_node(block)
+        del self._label2block[block.label]
+
+    def merge(self, graph):
+        """Merge with @graph, taking in account constraints"""
+        # -> add_edge(x, y, constraint)
+        for node in graph._nodes:
+            self.add_node(node)
+        for edge in graph._edges:
+            # Use "_uniq_" beacause the edge can already exist due to add_node
+            self.add_uniq_edge(*edge, constraint=graph.edges2constraint[edge])
+
+    def node2lines(self, node):
+        yield self.DotCellDescription(text=str(node.label.name),
+                                      attr={'align': 'center',
+                                            'colspan': 2,
+                                            'bgcolor': 'grey'})
+
+        if isinstance(node, asm_block_bad):
+            yield [self.DotCellDescription(
+                text=node.ERROR_TYPES.get(node._errno,
+                                          node._errno),
+                                           attr={})]
+            raise StopIteration
+        for line in node.lines:
+            if self._dot_offset:
+                yield [self.DotCellDescription(text="%.8X" % line.offset,
+                                               attr={}),
+                       self.DotCellDescription(text=str(line), attr={})]
+            else:
+                yield self.DotCellDescription(text=str(line), attr={})
+
+    def node_attr(self, node):
+        if isinstance(node, asm_block_bad):
+            return {'style': 'filled', 'fillcolor': 'red'}
+        return {}
+
+    def edge_attr(self, src, dst):
+        cst = self.edges2constraint.get((src, dst), None)
+        edge_color = "blue"
+
+        if len(self.successors(src)) > 1:
+            if cst == asm_constraint.c_next:
+                edge_color = "red"
+            else:
+                edge_color = "limegreen"
+
+        return {"color": edge_color}
+
+    def dot(self, offset=False):
+        """
+        @offset: (optional) if set, add the corresponding offsets in each node
+        """
+        self._dot_offset = offset
+        return super(AsmCFG, self).dot()
+
+    # Helpers
+    @property
+    def pendings(self):
+        """Dictionary of label -> set(AsmCFGPending instance) indicating
+        which label are missing in the current instance.
+        A label is missing if a block which is already in nodes has constraints
+        with him (thanks to its .bto) and the corresponding block is not yet in
+        nodes
+        """
+        return self._pendings
+
+    def _build_label2block(self):
+        self._label2block = {block.label: block
+                             for block in self._nodes}
+
+    def label2block(self, label):
+        """Return the block corresponding to label @label
+        @label: asm_label instance or ExprId(asm_label) instance"""
+        return self._label2block[label]
+
+    def rebuild_edges(self):
+        """Consider blocks '.bto' and rebuild edges according to them, ie:
+        - update constraint type
+        - add missing edge
+        - remove no more used edge
+
+        This method should be called if a block's '.bto' in nodes have been
+        modified without notifying this instance to resynchronize edges.
+        """
+        self._build_label2block()
+        for block in self._nodes:
+            edges = []
+            # Rebuild edges from bto
+            for constraint in block.bto:
+                dst = self._label2block.get(constraint.label,
+                                            None)
+                if dst is None:
+                    # Missing destination, add to pendings
+                    self._pendings.setdefault(constraint.label,
+                                              set()).add(self.AsmCFGPending(block,
+                                                                            constraint.c_t))
+                    continue
+                edge = (block, dst)
+                edges.append(edge)
+                if edge in self._edges:
+                    # Already known edge, constraint may have changed
+                    self.edges2constraint[edge] = constraint.c_t
+                else:
+                    # An edge is missing
+                    self.add_edge(edge[0], edge[1], constraint.c_t)
+
+            # Remove useless edges
+            for succ in self.successors(block):
+                edge = (block, succ)
+                if edge not in edges:
+                    self.del_edge(*edge)
+
+    def get_bad_blocks(self):
+        """Iterator on asm_block_bad elements"""
+        # A bad asm block is always a leaf
+        for block in self.leaves():
+            if isinstance(block, asm_block_bad):
+                yield block
+
+    def get_bad_blocks_predecessors(self, strict=False):
+        """Iterator on block with an asm_block_bad destination
+        @strict: (optional) if set, return block with only bad
+        successors
+        """
+        # Avoid returning the same block
+        done = set()
+        for badblock in self.get_bad_blocks():
+            for predecessor in self.predecessors_iter(badblock):
+                if predecessor not in done:
+                    if (strict and
+                        not all(isinstance(block, asm_block_bad)
+                                for block in self.successors_iter(predecessor))):
+                        continue
+                    yield predecessor
+                    done.add(predecessor)
+
+    def sanity_check(self):
+        """Do sanity checks on blocks' constraints:
+        * no pendings
+        * no multiple next constraint to same block
+        * no next constraint to self
+        """
+
+        if len(self._pendings) != 0:
+            raise RuntimeError("Some blocks are missing: %s" % map(str,
+                                                                   self._pendings.keys()))
+
+        next_edges = {edge: constraint
+                      for edge, constraint in self.edges2constraint.iteritems()
+                      if constraint == asm_constraint.c_next}
+
+        for block in self._nodes:
+            # No next constraint to self
+            if (block, block) in next_edges:
+                raise RuntimeError('Bad constraint: self in next')
+
+            # No multiple next constraint to same block
+            pred_next = list(pblock
+                             for (pblock, dblock) in next_edges
+                             if dblock == block)
+
+            if len(pred_next) > 1:
+                raise RuntimeError("Too many next constraints for bloc %r"
+                                   "(%s)" % (block.label,
+                                             map(lambda x: x.label, pred_next)))
+
+    def guess_blocks_size(self, mnemo):
+        """Asm and compute max block size
+        Add a 'size' and 'max_size' attribute on each block
+        @mnemo: metamn instance"""
+        for block in self._nodes:
+            size = 0
+            for instr in block.lines:
+                if isinstance(instr, asm_raw):
+                    # for special asm_raw, only extract len
+                    if isinstance(instr.raw, list):
+                        data = None
+                        if len(instr.raw) == 0:
+                            l = 0
+                        else:
+                            l = instr.raw[0].size / 8 * len(instr.raw)
+                    elif isinstance(instr.raw, str):
+                        data = instr.raw
+                        l = len(data)
+                    else:
+                        raise NotImplementedError('asm raw')
+                else:
+                    # Assemble the instruction to retrieve its len.
+                    # If the instruction uses symbol it will fail
+                    # In this case, the max_instruction_len is used
+                    try:
+                        candidates = mnemo.asm(instr)
+                        l = len(candidates[-1])
+                    except:
+                        l = mnemo.max_instruction_len
+                    data = None
+                instr.data = data
+                instr.l = l
+                size += l
+
+            block.size = size
+            block.max_size = size
+            log_asmbloc.info("size: %d max: %d", block.size, block.max_size)
+
+    def apply_splitting(self, symbol_pool, dis_block_callback=None, **kwargs):
+        """Consider @self' bto destinations and split block in @self if one of
+        these destinations jumps in the middle of this block.
+        In order to work, they must be only one block in @self per label in
+        @symbol_pool (which is true if @self come from the same disasmEngine).
+
+        @symbol_pool: asm_symbol_pool instance associated with @self'labels
+        @dis_block_callback: (optional) if set, this callback will be called on
+        new block destinations
+        @kwargs: (optional) named arguments to pass to dis_block_callback
+        """
+        # Get all possible destinations not yet resolved, with a resolved
+        # offset
+        block_dst = [label.offset
+                     for label in self.pendings
+                     if label.offset is not None]
+
+        todo = self.nodes().copy()
+        rebuild_needed = False
+
+        while todo:
+            # Find a block with a destination inside another one
+            cur_block = todo.pop()
+            range_start, range_stop = cur_block.get_range()
+
+            for off in block_dst:
+                if not (off > range_start and off <= range_stop):
+                    continue
+
+                # `cur_block` must be splitted at offset `off`
+                label = symbol_pool.getby_offset_create(off)
+                new_b = cur_block.split(off, label)
+                log_asmbloc.debug("Split block %x", off)
+                if new_b is None:
+                    log_asmbloc.error("Cannot split %x!!", off)
+                    continue
+
+                # The new block destinations may need to be disassembled
+                if dis_block_callback:
+                    offsets_to_dis = set(constraint.label.offset
+                                         for constraint in new_b.bto)
+                    dis_block_callback(cur_bloc=new_b,
+                                       offsets_to_dis=offsets_to_dis,
+                                       symbol_pool=symbol_pool, **kwargs)
+
+                # Update structure
+                rebuild_needed = True
+                self.add_node(new_b)
+
+                # The new block must be considered
+                todo.add(new_b)
+                range_start, range_stop = cur_block.get_range()
+
+        # Rebuild edges to match new blocks'bto
+        if rebuild_needed:
+            self.rebuild_edges()
+
+
+# Out of _merge_blocks to be computed only once
+_acceptable_block = lambda block: (not isinstance(block, asm_block_bad) and
+                                   len(block.lines) > 0)
+_parent = MatchGraphJoker(restrict_in=False, filt=_acceptable_block)
+_son = MatchGraphJoker(restrict_out=False, filt=_acceptable_block)
+_expgraph = _parent >> _son
+
+
+def _merge_blocks(dg, graph):
+    """Graph simplification merging asm_bloc with one and only one son with this
+    son if this son has one and only one parent"""
+    for match in _expgraph.match(graph):
+
+        # Get matching blocks
+        block, succ = match[_parent], match[_son]
+
+        # Remove block last instruction if needed
+        last_instr = block.lines[-1]
+        if last_instr.delayslot > 0:
+            # TODO: delayslot
+            raise RuntimeError("Not implemented yet")
+
+        if last_instr.is_subcall():
+            continue
+        if last_instr.breakflow() and last_instr.dstflow():
+            block.lines.pop()
+
+        # Merge block
+        block.lines += succ.lines
+        for nextb in graph.successors_iter(succ):
+            graph.add_edge(block, nextb, graph.edges2constraint[(succ, nextb)])
+
+        graph.del_node(succ)
+        break
+
+
+bbl_simplifier = DiGraphSimplifier()
+bbl_simplifier.enable_passes([_merge_blocks])
 
 
 def conservative_asm(mnemo, instr, symbols, conservative):
@@ -589,6 +1025,7 @@ def conservative_asm(mnemo, instr, symbols, conservative):
                 return c, candidates
     return candidates[0], candidates
 
+
 def fix_expr_val(expr, symbols):
     """Resolve an expression @expr using @symbols"""
     def expr_calc(e):
@@ -603,43 +1040,6 @@ def fix_expr_val(expr, symbols):
     return result
 
 
-def guess_blocks_size(mnemo, blocks):
-    """Asm and compute max block size"""
-
-    for block in blocks:
-        size = 0
-        for instr in block.lines:
-            if isinstance(instr, asm_raw):
-                # for special asm_raw, only extract len
-                if isinstance(instr.raw, list):
-                    data = None
-                    if len(instr.raw) == 0:
-                        l = 0
-                    else:
-                        l = instr.raw[0].size/8 * len(instr.raw)
-                elif isinstance(instr.raw, str):
-                    data = instr.raw
-                    l = len(data)
-                else:
-                    raise NotImplementedError('asm raw')
-            else:
-                # Assemble the instruction to retrieve its len.
-                # If the instruction uses symbol it will fail
-                # In this case, the max_instruction_len is used
-                try:
-                    candidates = mnemo.asm(instr)
-                    l = len(candidates[-1])
-                except:
-                    l = mnemo.max_instruction_len
-                data = None
-            instr.data = data
-            instr.l = l
-            size += l
-
-        block.size = size
-        block.max_size = size
-        log_asmbloc.info("size: %d max: %d", block.size, block.max_size)
-
 def fix_label_offset(symbol_pool, label, offset, modified):
     """Fix the @label offset to @offset. If the @offset has changed, add @label
     to @modified
@@ -652,6 +1052,7 @@ def fix_label_offset(symbol_pool, label, offset, modified):
 
 
 class BlockChain(object):
+
     """Manage blocks linked with an asm_constraint_next"""
 
     def __init__(self, symbol_pool, blocks):
@@ -672,7 +1073,6 @@ class BlockChain(object):
                     raise ValueError("Multiples pinned block detected")
                 self.pinned_block_idx = i
 
-
     def place(self):
         """Compute BlockChain min_offset and max_offset using pinned block and
         blocks' size
@@ -686,17 +1086,18 @@ class BlockChain(object):
         if not self.pinned:
             return
 
-
         offset_base = self.blocks[self.pinned_block_idx].label.offset
         assert(offset_base % self.blocks[self.pinned_block_idx].alignment == 0)
 
         self.offset_min = offset_base
-        for block in self.blocks[:self.pinned_block_idx-1:-1]:
-            self.offset_min -= block.max_size + (block.alignment - block.max_size) % block.alignment
+        for block in self.blocks[:self.pinned_block_idx - 1:-1]:
+            self.offset_min -= block.max_size + \
+                (block.alignment - block.max_size) % block.alignment
 
         self.offset_max = offset_base
         for block in self.blocks[self.pinned_block_idx:]:
-            self.offset_max += block.max_size + (block.alignment - block.max_size) % block.alignment
+            self.offset_max += block.max_size + \
+                (block.alignment - block.max_size) % block.alignment
 
     def merge(self, chain):
         """Best effort merge two block chains
@@ -718,7 +1119,7 @@ class BlockChain(object):
         if offset % pinned_block.alignment != 0:
             raise RuntimeError('Bad alignment')
 
-        for block in self.blocks[:self.pinned_block_idx-1:-1]:
+        for block in self.blocks[:self.pinned_block_idx - 1:-1]:
             new_offset = offset - block.size
             new_offset = new_offset - new_offset % pinned_block.alignment
             fix_label_offset(self.symbol_pool,
@@ -730,7 +1131,7 @@ class BlockChain(object):
         offset = pinned_block.label.offset + pinned_block.size
 
         last_block = pinned_block
-        for block in self.blocks[self.pinned_block_idx+1:]:
+        for block in self.blocks[self.pinned_block_idx + 1:]:
             offset += (- offset) % last_block.alignment
             fix_label_offset(self.symbol_pool,
                              block.label,
@@ -742,6 +1143,7 @@ class BlockChain(object):
 
 
 class BlockChainWedge(object):
+
     """Stand for wedges between blocks"""
 
     def __init__(self, symbol_pool, offset, size):
@@ -770,7 +1172,7 @@ def group_constrained_blocks(symbol_pool, blocks):
     # Group adjacent blocks
     remaining_blocks = list(blocks)
     known_block_chains = {}
-    lbl2block = {block.label:block for block in blocks}
+    lbl2block = {block.label: block for block in blocks}
 
     while remaining_blocks:
         # Create a new block chain
@@ -812,11 +1214,12 @@ def get_blockchains_address_interval(blockChains, dst_interval):
     for chain in blockChains:
         if not chain.pinned:
             continue
-        chain_interval = interval([(chain.offset_min, chain.offset_max-1)])
+        chain_interval = interval([(chain.offset_min, chain.offset_max - 1)])
         if chain_interval not in dst_interval:
             raise ValueError('Chain placed out of destination interval')
         allocated_interval += chain_interval
     return allocated_interval
+
 
 def resolve_symbol(blockChains, symbol_pool, dst_interval=None):
     """Place @blockChains in the @dst_interval"""
@@ -825,7 +1228,8 @@ def resolve_symbol(blockChains, symbol_pool, dst_interval=None):
     if dst_interval is None:
         dst_interval = interval([(0, 0xFFFFFFFFFFFFFFFF)])
 
-    forbidden_interval = interval([(-1, 0xFFFFFFFFFFFFFFFF+1)]) - dst_interval
+    forbidden_interval = interval(
+        [(-1, 0xFFFFFFFFFFFFFFFF + 1)]) - dst_interval
     allocated_interval = get_blockchains_address_interval(blockChains,
                                                           dst_interval)
     log_asmbloc.debug('allocated interval: %s', allocated_interval)
@@ -834,12 +1238,13 @@ def resolve_symbol(blockChains, symbol_pool, dst_interval=None):
 
     # Add wedge in forbidden intervals
     for start, stop in forbidden_interval.intervals:
-        wedge = BlockChainWedge(symbol_pool, offset=start, size=stop+1-start)
+        wedge = BlockChainWedge(
+            symbol_pool, offset=start, size=stop + 1 - start)
         pinned_chains.append(wedge)
 
     # Try to place bigger blockChains first
-    pinned_chains.sort(key=lambda x:x.offset_min)
-    blockChains.sort(key=lambda x:-x.max_size)
+    pinned_chains.sort(key=lambda x: x.offset_min)
+    blockChains.sort(key=lambda x: -x.max_size)
 
     fixed_chains = list(pinned_chains)
 
@@ -849,12 +1254,12 @@ def resolve_symbol(blockChains, symbol_pool, dst_interval=None):
             continue
         fixed = False
         for i in xrange(1, len(fixed_chains)):
-            prev_chain = fixed_chains[i-1]
+            prev_chain = fixed_chains[i - 1]
             next_chain = fixed_chains[i]
 
             if prev_chain.offset_max + chain.max_size < next_chain.offset_min:
                 new_chains = prev_chain.merge(chain)
-                fixed_chains[i-1:i] = new_chains
+                fixed_chains[i - 1:i] = new_chains
                 fixed = True
                 break
         if not fixed:
@@ -862,9 +1267,11 @@ def resolve_symbol(blockChains, symbol_pool, dst_interval=None):
 
     return [chain for chain in fixed_chains if isinstance(chain, BlockChain)]
 
+
 def filter_exprid_label(exprs):
     """Extract labels from list of ExprId @exprs"""
     return set(expr.name for expr in exprs if isinstance(expr.name, asm_label))
+
 
 def get_block_labels(block):
     """Extract labels used by @block"""
@@ -879,6 +1286,7 @@ def get_block_labels(block):
                 symbols.update(m2_expr.get_expr_ids(arg))
     labels = filter_exprid_label(symbols)
     return labels
+
 
 def assemble_block(mnemo, block, symbol_pool, conservative=False):
     """Assemble a @block using @symbol_pool
@@ -932,7 +1340,7 @@ def asmbloc_final(mnemo, blocks, blockChains, symbol_pool, conservative=False):
     log_asmbloc.debug("asmbloc_final")
 
     # Init structures
-    lbl2block = {block.label:block for block in blocks}
+    lbl2block = {block.label: block for block in blocks}
     blocks_using_label = {}
     for block in blocks:
         labels = get_block_labels(block)
@@ -975,34 +1383,16 @@ def asmbloc_final(mnemo, blocks, blockChains, symbol_pool, conservative=False):
             assemble_block(mnemo, block, symbol_pool, conservative)
 
 
-def sanity_check_blocks(blocks):
-    """Do sanity checks on blocks' constraints:
-    * no multiple next constraint to same block
-    * no next constraint to self"""
-
-    blocks_graph = basicblocs(blocks)
-    graph = blocks_graph.g
-    for label in graph.nodes():
-        if blocks_graph.blocs[label].get_next() == label:
-            raise RuntimeError('Bad constraint: self in next')
-        pred_next = set()
-        for pred in graph.predecessors(label):
-            if not pred in blocks_graph.blocs:
-                continue
-            if blocks_graph.blocs[pred].get_next() == label:
-                pred_next.add(pred)
-        if len(pred_next) > 1:
-            raise RuntimeError("Too many next constraints for bloc %r"%label)
-
 def asm_resolve_final(mnemo, blocks, symbol_pool, dst_interval=None):
     """Resolve and assemble @blocks using @symbol_pool into interval
     @dst_interval"""
 
-    sanity_check_blocks(blocks)
+    blocks.sanity_check()
 
-    guess_blocks_size(mnemo, blocks)
+    blocks.guess_blocks_size(mnemo)
     blockChains = group_constrained_blocks(symbol_pool, blocks)
-    resolved_blockChains = resolve_symbol(blockChains, symbol_pool, dst_interval)
+    resolved_blockChains = resolve_symbol(
+        blockChains, symbol_pool, dst_interval)
 
     asmbloc_final(mnemo, blocks, resolved_blockChains, symbol_pool)
     patches = {}
@@ -1016,223 +1406,12 @@ def asm_resolve_final(mnemo, blocks, symbol_pool, dst_interval=None):
                 continue
             assert len(instr.data) == instr.l
             patches[offset] = instr.data
-            instruction_interval = interval([(offset, offset + instr.l-1)])
+            instruction_interval = interval([(offset, offset + instr.l - 1)])
             if not (instruction_interval & output_interval).empty:
                 raise RuntimeError("overlapping bytes %X" % int(offset))
             instr.offset = offset
             offset += instr.l
     return patches
-
-def blist2graph(ab):
-    """
-    ab: list of asmbloc
-    return: graph of asmbloc
-    """
-    g = DiGraph()
-    g.lbl2bloc = {}
-    for b in ab:
-        g.lbl2bloc[b.label] = b
-        g.add_node(b.label)
-        for x in b.bto:
-            g.add_edge(b.label, x.label)
-    return g
-
-
-class basicblocs:
-
-    def __init__(self, ab=[]):
-        self.blocs = {}
-        self.g = DiGraph()
-        self.add_blocs(ab)
-
-    def add(self, b):
-        self.blocs[b.label] = b
-        self.g.add_node(b.label)
-        for dst in b.bto:
-            if isinstance(dst.label, asm_label):
-                self.g.add_edge(b.label, dst.label)
-
-    def add_blocs(self, ab):
-        for b in ab:
-            self.add(b)
-
-    def get_bad_dst(self):
-        o = set()
-        for b in self.blocs.values():
-            for c in b.bto:
-                if c.c_t == asm_constraint.c_bad:
-                    o.add(b)
-        return o
-
-
-def find_parents(blocs, l):
-    p = set()
-    for b in blocs:
-        if l in [x.label for x in b.bto if isinstance(x.label, asm_label)]:
-            p.add(b.label)
-    return p
-
-
-def bloc_blink(blocs):
-    for b in blocs:
-        b.parents = find_parents(blocs, b.label)
-
-
-def getbloc_around(blocs, a, level=3, done=None, blocby_label=None):
-
-    if not blocby_label:
-        blocby_label = {}
-        for b in blocs:
-            blocby_label[b.label] = b
-    if done is None:
-        done = set()
-
-    done.add(a)
-    if not level:
-        return done
-    for b in a.parents:
-        b = blocby_label[b]
-        if b in done:
-            continue
-        done.update(getbloc_around(blocs, b, level - 1, done, blocby_label))
-    for b in a.bto:
-        b = blocby_label[b.label]
-        if b in done:
-            continue
-        done.update(getbloc_around(blocs, b, level - 1, done, blocby_label))
-    return done
-
-
-def getbloc_parents(blocs, a, level=3, done=None, blocby_label=None):
-
-    if not blocby_label:
-        blocby_label = {}
-        for b in blocs:
-            blocby_label[b.label] = b
-    if done is None:
-        done = set()
-
-    done.add(a)
-    if not level:
-        return done
-    for b in a.parents:
-        b = blocby_label[b]
-        if b in done:
-            continue
-        done.update(getbloc_parents(blocs, b, level - 1, done, blocby_label))
-    return done
-
-# get ONLY level_X parents
-
-
-def getbloc_parents_strict(
-    blocs, a, level=3, rez=None, done=None, blocby_label=None):
-
-    if not blocby_label:
-        blocby_label = {}
-        for b in blocs:
-            blocby_label[b.label] = b
-    if rez is None:
-        rez = set()
-    if done is None:
-        done = set()
-
-    done.add(a)
-    if level == 0:
-        rez.add(a)
-    if not level:
-        return rez
-    for b in a.parents:
-        b = blocby_label[b]
-        if b in done:
-            continue
-        rez.update(getbloc_parents_strict(
-            blocs, b, level - 1, rez, done, blocby_label))
-    return rez
-
-
-def bloc_find_path_next(blocs, blocby_label, a, b, path=None):
-    if path == None:
-        path = []
-    if a == b:
-        return [path]
-
-    all_path = []
-    for x in a.bto:
-        if x.c_t != asm_constraint.c_next:
-            continue
-        if not x.label in blocby_label:
-            log_asmbloc.error('XXX unknown label')
-            continue
-        x = blocby_label[x.label]
-        all_path += bloc_find_path_next(blocs, blocby_label, x, b, path + [a])
-        # stop if at least one path found
-        if all_path:
-            return all_path
-    return all_path
-
-
-def bloc_merge(blocs, dont_merge=[]):
-    blocby_label = {}
-    for b in blocs:
-        blocby_label[b.label] = b
-        b.parents = find_parents(blocs, b.label)
-
-    i = -1
-    while i < len(blocs) - 1:
-        i += 1
-        b = blocs[i]
-        if b.label in dont_merge:
-            continue
-        p = set(b.parents)
-        # if bloc dont self ref
-        if b.label in p:
-            continue
-        # and bloc has only one parent
-        if len(p) != 1:
-            continue
-        # may merge
-        bpl = p.pop()
-        # bp = getblocby_label(blocs, bpl)
-        bp = blocby_label[bpl]
-        # and parent has only one son
-        if len(bp.bto) != 1:
-            continue
-        # and will not create next loop composed of constraint_next from son to
-        # parent
-
-        path = bloc_find_path_next(blocs, blocby_label, b, bp)
-        if path:
-            continue
-        if bp.lines:
-            l = bp.lines[-1]
-            # jmp opt; jcc opt
-            if l.is_subcall():
-                continue
-            if l.breakflow() and l.dstflow():
-                bp.lines.pop()
-        # merge
-        # sons = b.bto[:]
-
-        # update parents
-        for s in b.bto:
-            if not isinstance(s.label, asm_label):
-                continue
-            if s.label.name == None:
-                continue
-            if not s.label in blocby_label:
-                log_asmbloc.error("unknown parent XXX")
-                continue
-            bs = blocby_label[s.label]
-            for p in list(bs.parents):
-                if p == b.label:
-                    bs.parents.discard(p)
-                    bs.parents.add(bp.label)
-        bp.lines += b.lines
-        bp.bto = b.bto
-
-        del blocs[i]
-        i = -1
 
 
 class disasmEngine(object):
@@ -1254,18 +1433,18 @@ class disasmEngine(object):
         self.__dict__.update(kwargs)
 
     def dis_bloc(self, offset):
-        l = self.symbol_pool.getby_offset_create(offset)
-        current_bloc = asm_bloc(l)
-        dis_bloc(self.arch, self.bs, current_bloc, offset, self.job_done,
-                 self.symbol_pool,
-                 dont_dis=self.dont_dis, split_dis=self.split_dis,
-                 follow_call=self.follow_call,
-                 dontdis_retcall=self.dontdis_retcall,
-                 lines_wd=self.lines_wd,
-                 dis_bloc_callback=self.dis_bloc_callback,
-                 dont_dis_nulstart_bloc=self.dont_dis_nulstart_bloc,
-                 attrib=self.attrib)
-        return current_bloc
+        label = self.symbol_pool.getby_offset_create(offset)
+        current_block, _ = dis_bloc(self.arch, self.bs, label, offset,
+                                    self.job_done, self.symbol_pool,
+                                    dont_dis=self.dont_dis,
+                                    split_dis=self.split_dis,
+                                    follow_call=self.follow_call,
+                                    dontdis_retcall=self.dontdis_retcall,
+                                    lines_wd=self.lines_wd,
+                                    dis_bloc_callback=self.dis_bloc_callback,
+                                    dont_dis_nulstart_bloc=self.dont_dis_nulstart_bloc,
+                                    attrib=self.attrib)
+        return current_block
 
     def dis_multibloc(self, offset, blocs=None):
         blocs = dis_bloc_all(self.arch, self.bs, offset, self.job_done,
@@ -1280,4 +1459,3 @@ class disasmEngine(object):
                              dont_dis_nulstart_bloc=self.dont_dis_nulstart_bloc,
                              attrib=self.attrib)
         return blocs
-

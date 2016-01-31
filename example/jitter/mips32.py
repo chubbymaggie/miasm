@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 #-*- coding:utf-8 -*-
 from argparse import ArgumentParser
-from miasm2.analysis import debugging, gdbserver
+from miasm2.analysis import debugging
 from miasm2.jitter.csts import *
 from miasm2.analysis.machine import Machine
 
@@ -38,7 +38,7 @@ def code_sentinelle(jitter):
     return True
 
 def jit_mips32_binary(args):
-    filepath, entryp = args.binary, int(args.addr, 16)
+    filepath, entryp = args.binary, int(args.addr, 0)
     myjit = machine.jitter(jit_type = args.jitter)
     myjit.init_stack()
 
@@ -71,6 +71,5 @@ def jit_mips32_binary(args):
         print(myjit.continue_run())
     return myjit
 if __name__ == '__main__':
-    from sys import stderr
     args = parser.parse_args()
     myjit = jit_mips32_binary(args)

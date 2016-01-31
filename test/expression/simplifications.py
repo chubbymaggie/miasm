@@ -18,8 +18,10 @@ f = ExprId('f', size=64)
 m = ExprMem(a)
 s = a[:8]
 
+i0 = ExprInt(uint32(0x0))
 i1 = ExprInt(uint32(0x1))
 i2 = ExprInt(uint32(0x2))
+icustom = ExprInt(uint32(0x12345678))
 cc = ExprCond(a, b, c)
 
 o = ExprCompose([(a[:8], 8, 16),
@@ -60,7 +62,10 @@ to_test = [(ExprInt32(1) - ExprInt32(1), ExprInt32(0)),
             ExprOp('<<<', a, (b-c))),
            (ExprOp('>>>', ExprOp('<<<', a, b), b),
             a),
-
+           (ExprOp(">>>", ExprInt16(0x1000), ExprInt16(0x11)),
+            ExprInt16(0x800)),
+           (ExprOp("<<<", ExprInt16(0x1000), ExprInt16(0x11)),
+            ExprInt16(0x2000)),
 
            (ExprOp('>>>', ExprOp('<<<', a, ExprInt32(10)), ExprInt32(2)),
             ExprOp('<<<', a, ExprInt32(8))),
@@ -154,9 +159,9 @@ to_test = [(ExprInt32(1) - ExprInt32(1), ExprInt32(0)),
     (ExprCond(a, b, c) >> ExprCond(a, d, e),
      ExprCond(a, b >> d, c >> e)),
 
-    (a & b & ExprInt_fromsize(a.size, -1), a & b),
-    (a | b | ExprInt_fromsize(a.size, -1),
-     ExprInt_fromsize(a.size, -1)),
+    (a & b & ExprInt(-1, a.size), a & b),
+    (a | b | ExprInt(-1, a.size),
+     ExprInt(-1, a.size)),
     (ExprOp('-', ExprInt8(1), ExprInt8(0)),
      ExprInt8(1)),
 
@@ -165,9 +170,9 @@ to_test = [(ExprInt32(1) - ExprInt32(1), ExprInt32(0)),
     (ExprCompose([(a, 0, 32), (ExprInt32(0), 32, 64)]) << ExprInt64(0x10),
      ExprCompose([(ExprInt16(0), 0, 16), (a, 16, 48), (ExprInt16(0), 48, 64)])),
     (ExprCompose([(a, 0, 32), (ExprInt32(0), 32, 64)]) << ExprInt64(0x30),
-     ExprCompose([(ExprInt_fromsize(48, 0), 0, 48), (a[:0x10], 48, 64)])),
+     ExprCompose([(ExprInt(0, 48), 0, 48), (a[:0x10], 48, 64)])),
     (ExprCompose([(a, 0, 32), (ExprInt32(0), 32, 64)]) << ExprInt64(0x11),
-     ExprCompose([(ExprInt_fromsize(0x11, 0), 0, 0x11), (a, 0x11, 0x31), (ExprInt_fromsize(0xF, 0), 0x31, 0x40)])),
+     ExprCompose([(ExprInt(0, 0x11), 0, 0x11), (a, 0x11, 0x31), (ExprInt(0, 0xF), 0x31, 0x40)])),
     (ExprCompose([(a, 0, 32), (ExprInt32(0), 32, 64)]) << ExprInt64(0x40),
      ExprInt64(0)),
     (ExprCompose([(a, 0, 32), (ExprInt32(0), 32, 64)]) << ExprInt64(0x50),
@@ -178,9 +183,9 @@ to_test = [(ExprInt32(1) - ExprInt32(1), ExprInt32(0)),
     (ExprCompose([(ExprInt32(0), 0, 32), (a, 32, 64)]) >> ExprInt64(0x10),
      ExprCompose([(ExprInt16(0), 0, 16), (a, 16, 48), (ExprInt16(0), 48, 64)])),
     (ExprCompose([(ExprInt32(0), 0, 32), (a, 32, 64)]) >> ExprInt64(0x30),
-     ExprCompose([(a[0x10:], 0, 16), (ExprInt_fromsize(48, 0), 16, 64)])),
+     ExprCompose([(a[0x10:], 0, 16), (ExprInt(0, 48), 16, 64)])),
     (ExprCompose([(ExprInt32(0), 0, 32), (a, 32, 64)]) >> ExprInt64(0x11),
-     ExprCompose([(ExprInt_fromsize(0xf, 0), 0, 0xf), (a, 0xf, 0x2f), (ExprInt_fromsize(0x11, 0), 0x2f, 0x40)])),
+     ExprCompose([(ExprInt(0, 0xf), 0, 0xf), (a, 0xf, 0x2f), (ExprInt(0, 0x11), 0x2f, 0x40)])),
     (ExprCompose([(ExprInt32(0), 0, 32), (a, 32, 64)]) >> ExprInt64(0x40),
      ExprInt64(0)),
     (ExprCompose([(ExprInt32(0), 0, 32), (a, 32, 64)]) >> ExprInt64(0x50),
@@ -297,6 +302,23 @@ to_test = [(ExprInt32(1) - ExprInt32(1), ExprInt32(0)),
      ExprInt1(1)),
     (expr_cmps(ExprInt32(-10), ExprInt32(-5)),
      ExprInt1(0)),
+
+    (ExprOp("<<<c_rez", i1, i0, i0),
+     i1),
+    (ExprOp("<<<c_rez", i1, i1, i0),
+     ExprInt32(2)),
+    (ExprOp("<<<c_rez", i1, i1, i1),
+     ExprInt32(3)),
+    (ExprOp(">>>c_rez", icustom, i0, i0),
+     icustom),
+    (ExprOp(">>>c_rez", icustom, i1, i0),
+     ExprInt32(0x91A2B3C)),
+    (ExprOp(">>>c_rez", icustom, i1, i1),
+     ExprInt32(0x891A2B3C)),
+    (ExprOp("idiv", ExprInt16(0x0123), ExprInt16(0xfffb))[:8],
+     ExprInt8(0xc6)),
+    (ExprOp("imod", ExprInt16(0x0123), ExprInt16(0xfffb))[:8],
+     ExprInt8(0x01)),
 
 ]
 

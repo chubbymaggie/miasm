@@ -5,15 +5,13 @@ from pdb import pm
 from elfesteem import pe_init
 from elfesteem.strpatchwork import StrPatchwork
 
-from miasm2.core.cpu import parse_ast
 from miasm2.core import parse_asm, asmbloc
-import miasm2.expression.expression as m2_expr
 from miasm2.analysis.machine import Machine
 from miasm2.core.interval import interval
 
 parser = ArgumentParser("Multi-arch (32 bits) assembler")
-parser.add_argument('architecture', help="architecture: " + \
-                        ",".join(Machine.available_machine()))
+parser.add_argument('architecture', help="architecture: " +
+                    ",".join(Machine.available_machine()))
 parser.add_argument("source", help="Source file to assemble")
 parser.add_argument("output", help="Output file")
 parser.add_argument("--PE", help="Create a PE with a few imports",
@@ -76,14 +74,13 @@ if args.PE:
                            pe.DirImport.get_funcvirt('MessageBoxA'))
 
 # Print and graph firsts blocs before patching it
-for bloc in blocs[0]:
+for bloc in blocs:
     print bloc
-graph = asmbloc.bloc2graph(blocs[0])
-open("graph.txt", "w").write(graph)
+open("graph.dot", "w").write(blocs.dot())
 
 # Apply patches
 patches = asmbloc.asm_resolve_final(machine.mn,
-                                    blocs[0],
+                                    blocs,
                                     symbol_pool,
                                     dst_interval)
 if args.encrypt:
@@ -98,8 +95,13 @@ if args.encrypt:
     patches = new_patches
 
 print patches
-for offset, raw in patches.items():
-    virt[offset] = raw
+if isinstance(virt, StrPatchwork):
+    for offset, raw in patches.items():
+        virt[offset] = raw
+else:
+    for offset, raw in patches.items():
+        virt.set(offset, raw)
+
 
 # Produce output
 open(args.output, 'wb').write(str(output))

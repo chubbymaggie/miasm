@@ -2,20 +2,14 @@ import sys
 import os
 import tempfile
 
-# Set your path first!
-sys.path.append("/home/serpilliere/tools/pyparsing/pyparsing-2.0.1/build/lib.linux-x86_64-2.7")
-sys.path.append("/home/serpilliere/projet/miasm/build/lib.linux-x86_64-2.7")
-sys.path.append("/home/serpilliere/projet/elfesteem/build/lib.linux-x86_64-2.7")
-
 from idaapi import GraphViewer
 
 from miasm2.core.bin_stream_ida import bin_stream_ida
 from miasm2.core.asmbloc import *
 from miasm2.expression.simplifications import expr_simp
 from miasm2.expression.expression import *
-
-from miasm2.analysis.data_analysis import intra_bloc_flow_raw, inter_bloc_flow
-from miasm2.analysis.data_analysis import intra_bloc_flow_symbexec
+from miasm2.analysis.data_analysis import inter_bloc_flow, \
+    intra_bloc_flow_symbexec
 
 from utils import guess_machine, expr2colorstr
 
@@ -62,7 +56,7 @@ class GraphMiasmIR(GraphViewer):
                 continue
             dst = ir_arch.dst_trackback(irbloc)
             for d in dst:
-                if not self.ir_arch.ExprIsLabel(d):
+                if not expr_is_label(d):
                     continue
 
                 d = d.name
@@ -125,8 +119,7 @@ print hex(ad)
 ab = mdis.dis_multibloc(ad)
 
 print "generating graph"
-g = bloc2graph(ab, True)
-open('asm_flow.txt', 'w').write(g)
+open('asm_flow.dot', 'w').write(ab.graph.dot(label=True))
 
 
 print "generating IR... %x" % ad
@@ -144,9 +137,8 @@ for irb in ir_arch.blocs.values():
         for i, expr in enumerate(irs):
             irs[i] = ExprAff(expr_simp(expr.dst), expr_simp(expr.src))
 
-ir_arch.gen_graph()
-out = ir_arch.graph()
-open(os.path.join(tempfile.gettempdir(), 'graph.txt'), 'wb').write(out)
+out = ir_arch.graph.dot()
+open(os.path.join(tempfile.gettempdir(), 'graph.dot'), 'wb').write(out)
 
 
 # ir_arch.dead_simp()
@@ -203,7 +195,6 @@ def get_modified_symbols(sb):
 def gen_bloc_data_flow_graph(ir_arch, in_str, ad):  # arch, attrib, pool_bin, bloc, symbol_pool):
     out_str = ""
 
-    ir_arch.gen_graph()
     # ir_arch.dead_simp()
 
     irbloc_0 = None
@@ -219,7 +210,6 @@ def gen_bloc_data_flow_graph(ir_arch, in_str, ad):  # arch, attrib, pool_bin, bl
     bloc2w = {}
 
     for irbloc in ir_arch.blocs.values():
-        # intra_bloc_flow_raw(ir_arch, flow_graph, irbloc)
         intra_bloc_flow_symbexec(ir_arch, flow_graph, irbloc)
         # intra_bloc_flow_symb(ir_arch, flow_graph, irbloc)
 
@@ -237,7 +227,7 @@ def gen_bloc_data_flow_graph(ir_arch, in_str, ad):  # arch, attrib, pool_bin, bl
         if n in ir_arch.arch.regs.all_regs_ids:
             print node
 
-    open('data.txt', 'w').write(flow_graph.dot())
+    open('data.dot', 'w').write(flow_graph.dot())
     return flow_graph
 
 
@@ -293,7 +283,7 @@ class GraphMiasmIRFlow(GraphViewer):
 #def node2str(self, n):
 #    return "%s, %s\\l%s" % n
 #flow_graph.node2str = lambda n: node2str(flow_graph, n)
-#open('data_flow.txt', 'w').write(flow_graph.dot())
+#open('data_flow.dot', 'w').write(flow_graph.dot())
 
 # h =  GraphMiasmIRFlow(flow_graph, "Miasm IRFlow graph", None)
 # h.Show()

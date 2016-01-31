@@ -122,7 +122,7 @@ class DependencyNode(object):
 
 class CacheWrapper(IterableUserDict):
 
-    """Wrapper class for cache dictionnary"""
+    """Wrapper class for cache dictionary"""
 
     def __init__(self, dct=None):
         """Create a CacheWrapper with value @dct."""
@@ -148,9 +148,9 @@ class CacheWrapper(IterableUserDict):
 
     @property
     def nostep_cache(self):
-        """Dictionnary of DependencyNode and their dependencies,
+        """Dictionary of DependencyNode and their dependencies,
         without the step attribute.
-        The dictionnary is generated once when the method is called for the
+        The dictionary is generated once when the method is called for the
         first time and not updated afterward.
         """
         if self._nostep_cache is None:
@@ -239,12 +239,12 @@ class DependencyDict(object):
 
     @property
     def cache(self):
-        "Dictionnary of DependencyNode and their dependencies"
+        "Dictionary of DependencyNode and their dependencies"
         return self._cache
 
     @property
     def pending(self):
-        """Dictionnary of DependencyNode and their dependencies, waiting for
+        """Dictionary of DependencyNode and their dependencies, waiting for
         resolution"""
         return self._pending
 
@@ -530,7 +530,7 @@ class DependencyResult(object):
 
     @property
     def has_loop(self):
-        """True if current dictionnary has a loop"""
+        """True if current dictionary has a loop"""
         if self._has_loop is None:
             self._has_loop = (len(self.relevant_labels) !=
                               len(set(self.relevant_labels)))
@@ -539,7 +539,7 @@ class DependencyResult(object):
     def emul(self, ctx=None, step=False):
         """Symbolic execution of relevant nodes according to the history
         Return the values of input nodes' elements
-        @ctx: (optional) Initial context as dictionnary
+        @ctx: (optional) Initial context as dictionary
         @step: (optional) Verbose execution
 
         Warning: The emulation is not sound if the input nodes depend on loop
@@ -686,7 +686,6 @@ class DependencyGraph(object):
     def __init__(self, ira, implicit=False, apply_simp=True, follow_mem=True,
                  follow_call=True):
         """Create a DependencyGraph linked to @ira
-        The IRA graph must have been computed
 
         @ira: IRAnalysis instance
         @implicit: (optional) Imply implicit dependencies
@@ -701,9 +700,6 @@ class DependencyGraph(object):
         self._implicit = implicit
         self._step_counter = itertools.count()
         self._current_step = next(self._step_counter)
-
-        # The IRA graph must be computed
-        assert hasattr(self._ira, 'g')
 
         # Create callback filters. The order is relevant.
         self._cb_follow = []
@@ -892,7 +888,7 @@ class DependencyGraph(object):
     def _get_previousblocks(self, label):
         """Return an iterator on predecessors blocks of @label, with their
         lengths"""
-        preds = self._ira.g.predecessors_iter(label)
+        preds = self._ira.graph.predecessors_iter(label)
         for pred_label in preds:
             length = len(self._get_irs(pred_label))
             yield (pred_label, length)

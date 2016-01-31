@@ -34,8 +34,8 @@ def update_engine_from_cpu(cpu, exec_engine):
     for symbol in exec_engine.symbols:
         if isinstance(symbol, m2_expr.ExprId):
             if hasattr(cpu, symbol.name):
-                value = m2_expr.ExprInt_fromsize(symbol.size,
-                                                 getattr(cpu, symbol.name))
+                value = m2_expr.ExprInt(getattr(cpu, symbol.name),
+                                        symbol.size)
                 exec_engine.symbols.symbols_id[symbol] = value
         else:
             raise NotImplementedError("Type not handled: %s" % symbol)
@@ -57,10 +57,8 @@ class JitCore_Python(jitcore.JitCore):
     def load(self):
         "Preload symbols according to current architecture"
 
-        symbols_init =  {}
-        for r in self.ir_arch.arch.regs.all_regs_ids_no_alias:
-            symbols_init[r] = self.ir_arch.arch.regs.regs_init[r]
-
+        symbols_init = {r:m2_expr.ExprInt(0, size=r.size)
+                        for r in self.ir_arch.arch.regs.all_regs_ids_no_alias}
         self.symbexec = symbexec(self.ir_arch, symbols_init,
                                  func_read = self.func_read,
                                  func_write = self.func_write)
@@ -73,15 +71,14 @@ class JitCore_Python(jitcore.JitCore):
         size = expr_mem.size / 8
         value = self.cpu.get_mem(addr, size)
 
-        return m2_expr.ExprInt_fromsize(expr_mem.size,
-                                        int(value[::-1].encode("hex"), 16))
+        return m2_expr.ExprInt(int(value[::-1].encode("hex"), 16),
+                               expr_mem.size)
 
-    def func_write(self, symb_exec, dest, data, mem_cache):
+    def func_write(self, symb_exec, dest, data):
         """Memory read wrapper for symbolic execution
         @symb_exec: symbexec instance
         @dest: ExprMem instance
-        @data: Expr instance
-        @mem_cache: dict"""
+        @data: Expr instance"""
 
         # Get the content to write
         data = expr_simp(data)
@@ -183,7 +180,7 @@ class JitCore_Python(jitcore.JitCore):
         # Associate myfunc with current label
         self.lbl2jitbloc[label.offset] = myfunc
 
-    def jit_call(self, label, cpu, vmmngr):
+    def jit_call(self, label, cpu, vmmngr, _breakpoints):
         """Call the function label with cpu and vmmngr states
         @label: function's label
         @cpu: JitCpu instance

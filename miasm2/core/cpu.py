@@ -260,9 +260,10 @@ def extract_ast_core(v, my_id2expr, my_int2expr):
         pass
     elif len(sizes) == 1:
         size = sizes.pop()
-        my_int2expr = lambda x: m2_expr.ExprInt_fromsize(size, x)
+        my_int2expr = lambda x: m2_expr.ExprInt(x, size)
     else:
-        raise ValueError('multiple sizes in ids')
+        # Multiple sizes in ids
+        raise StopIteration
     e = ast_raw2expr(ast_tokens, my_id2expr, my_int2expr)
     return e
 
@@ -910,6 +911,9 @@ class metamn(type):
 
 
 class instruction(object):
+    __slots__ = ["name", "mode", "args",
+                 "l", "b", "offset", "data",
+                 "additional_info", "delayslot"]
 
     def __init__(self, name, mode, args, additional_info=None):
         self.name = name
@@ -965,7 +969,7 @@ class instruction(object):
                     if size is None:
                         default_size = self.get_symbol_size(x, symbols)
                         size = default_size
-                    value = m2_expr.ExprInt_fromsize(size, symbols[name].offset)
+                    value = m2_expr.ExprInt(symbols[name].offset, size)
                 fixed_ids[x] = value
             e = e.replace_expr(fixed_ids)
             e = expr_simp(e)
@@ -1020,11 +1024,7 @@ class cls_mn(object):
                 else:
                     todo.append((dict(fname_values), (nb, v), offset_b))
 
-        candidates = [c for c in candidates]
-
-        if not candidates:
-            raise Disasm_Exception('cannot disasm (guess) at %X' % offset)
-        return candidates
+        return [c for c in candidates]
 
     def reset_class(self):
         for f in self.fields_order:
@@ -1093,10 +1093,16 @@ class cls_mn(object):
         if not isinstance(bs_o, bin_stream):
             bs_o = bin_stream_str(bs_o)
 
+        bs_o.enter_atomic_mode()
+
         offset_o = offset
         pre_dis_info, bs, mode, offset, prefix_len = cls.pre_dis(
             bs_o, mode_o, offset)
         candidates = cls.guess_mnemo(bs, mode, pre_dis_info, offset)
+        if not candidates:
+            bs_o.leave_atomic_mode()
+            raise Disasm_Exception('cannot disasm (guess) at %X' % offset)
+
         out = []
         out_c = []
         if hasattr(bs, 'getlen'):
@@ -1180,6 +1186,9 @@ class cls_mn(object):
                 alias = True
             out.append(instr)
             out_c.append(c)
+
+        bs_o.leave_atomic_mode()
+
         if not out:
             raise Disasm_Exception('cannot disasm at %X' % offset_o)
         if len(out) != 1:
@@ -1468,7 +1477,7 @@ class imm_noarg(object):
     def int2expr(self, v):
         if (v & ~self.intmask) != 0:
             return None
-        return m2_expr.ExprInt_fromsize(self.intsize, v)
+        return m2_expr.ExprInt(v, self.intsize)
 
     def expr2int(self, e):
         if not isinstance(e, m2_expr.ExprInt):

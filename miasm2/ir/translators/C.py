@@ -18,15 +18,9 @@ class TranslatorC(Translator):
     dct_rot = {'<<<': 'rot_left',
                '>>>': 'rot_right',
                }
-    dct_div = {'div8': "div_op",
-               'div16': "div_op",
-               'div32': "div_op",
-               'idiv32': "div_op",  # XXX to test
-               '<<<c_rez': 'rcl_rez_op',
-               '<<<c_cf': 'rcl_cf_op',
-               '>>>c_rez': 'rcr_rez_op',
-               '>>>c_cf': 'rcr_cf_op',
-               }
+    dct_rotc = {'<<<c_rez': 'rcl_rez_op',
+                '>>>c_rez': 'rcr_rez_op',
+                }
 
 
     def from_ExprId(self, expr):
@@ -67,8 +61,9 @@ class TranslatorC(Translator):
                   expr.op.endswith("_to_double")   or
                   expr.op.startswith("access_")    or
                   expr.op.startswith("load_")      or
+                  expr.op.startswith("fxam_c")     or
                   expr.op in ["-", "ftan", "frndint", "f2xm1",
-                              "fsin", "fsqrt", "fabs", "fcos"]):
+                              "fsin", "fsqrt", "fabs", "fcos", "fchs"]):
                 return "%s(%s)" % (expr.op, self.from_expr(expr.args[0]))
             else:
                 raise NotImplementedError('Unknown op: %r' % expr.op)
@@ -102,7 +97,8 @@ class TranslatorC(Translator):
                                                    size2mask(expr.args[0].size))
             elif (expr.op.startswith('cpuid') or
                   expr.op.startswith("fcom")  or
-                  expr.op in ["fadd", "fsub", "fdiv", 'fmul', "fscale"]):
+                  expr.op in ["fadd", "fsub", "fdiv", 'fmul', "fscale",
+                              "fprem", "fprem_lsb", "fyl2x", "fpatan"]):
                 return "%s(%s, %s)" % (expr.op, self.from_expr(expr.args[0]),
                                        self.from_expr(expr.args[1]))
             elif expr.op == "segm":
@@ -120,8 +116,8 @@ class TranslatorC(Translator):
             else:
                 raise NotImplementedError('Unknown op: %r' % expr.op)
 
-        elif len(expr.args) == 3 and expr.op in self.dct_div:
-            return '(%s(%s, %s, %s, %s) &0x%x)' % (self.dct_div[expr.op],
+        elif len(expr.args) == 3 and expr.op in self.dct_rotc:
+            return '(%s(%s, %s, %s, %s) &0x%x)' % (self.dct_rotc[expr.op],
                                                    expr.args[0].size,
                                                    self.from_expr(expr.args[0]),
                                                    self.from_expr(expr.args[1]),
