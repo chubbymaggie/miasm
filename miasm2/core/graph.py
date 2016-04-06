@@ -195,8 +195,6 @@ class DiGraph(object):
         """Render dot graph with HTML"""
 
         escape_chars = re.compile('[' + re.escape('{}') + '&|<>' + ']')
-        label_attr = 'colspan="2" align="center" bgcolor="grey"'
-        edge_attr = 'label = "%s" color="%s" style="bold"'
         td_attr = {'align': 'left'}
         nodes_attr = {'shape': 'Mrecord',
                       'fontname': 'Courier New'}
@@ -287,7 +285,6 @@ class DiGraph(object):
             dominators[node] = set(nodes)
 
         dominators[head] = set([head])
-        modified = True
         todo = set(nodes)
 
         while todo:
@@ -480,6 +477,34 @@ class DiGraph(object):
     def walk_depth_first_backward(self, head):
         """Performs a depth first search on the reversed graph from @head"""
         return self._walk_generic_first(head, -1, self.predecessors_iter)
+
+    def has_loop(self):
+        """Return True if the graph contains at least a cycle"""
+        todo = list(self.nodes())
+        # tested nodes
+        done = set()
+        # current DFS nodes
+        current = set()
+        while todo:
+            node = todo.pop()
+            if node in done:
+                continue
+
+            if node in current:
+                # DFS branch end
+                for succ in self.successors_iter(node):
+                    if succ in current:
+                        return True
+                # A node cannot be in current AND in done
+                current.remove(node)
+                done.add(node)
+            else:
+                # Launch DFS from node
+                todo.append(node)
+                current.add(node)
+                todo += self.successors(node)
+
+        return False
 
     def compute_natural_loops(self, head):
         """

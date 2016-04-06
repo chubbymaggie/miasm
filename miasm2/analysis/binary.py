@@ -2,6 +2,7 @@ import logging
 
 from miasm2.core.bin_stream import bin_stream_str, bin_stream_elf, bin_stream_pe
 from miasm2.jitter.csts import PAGE_READ
+from miasm2.core.asmbloc import asm_symbol_pool
 
 
 log = logging.getLogger("binary")
@@ -93,6 +94,7 @@ class Container(object):
         self._bin_stream = None
         self._entry_point = None
         self._arch = None
+        self._symbol_pool = asm_symbol_pool()
 
         # Launch parsing
         self.parse(*args, **kwargs)
@@ -117,13 +119,18 @@ class Container(object):
         "Return the guessed architecture"
         return self._arch
 
+    @property
+    def symbol_pool(self):
+        "asm_symbol_pool instance preloaded with container symbols (if any)"
+        return self._symbol_pool
+
 
 ## Format dependent classes
 class ContainerPE(Container):
     "Container abstraction for PE"
 
     def parse(self, data, vm=None):
-        from miasm2.jitter.loader.pe import vm_load_pe, preload_pe, guess_arch
+        from miasm2.jitter.loader.pe import vm_load_pe, guess_arch
         from elfesteem import pe_init
 
         # Parse signature
@@ -160,8 +167,7 @@ class ContainerELF(Container):
     "Container abstraction for ELF"
 
     def parse(self, data, vm=None):
-        from miasm2.jitter.loader.elf import \
-            vm_load_elf, preload_elf, guess_arch
+        from miasm2.jitter.loader.elf import vm_load_elf, guess_arch
         from elfesteem import elf_init
 
         # Parse signature
@@ -186,6 +192,22 @@ class ContainerELF(Container):
             self._entry_point = self._executable.Ehdr.entry
         except Exception, error:
             raise ContainerParsingException('Cannot read ELF: %s' % error)
+
+        # Add known symbols
+        symtab = self._executable.getsectionbyname(".symtab")
+        if symtab is not None:
+            for name, symb in symtab.symbols.iteritems():
+                offset = symb.value
+                if offset != 0:
+                    try:
+                        self._symbol_pool.add_label(name, offset)
+                    except ValueError:
+                        # Two symbols points on the same offset
+                        log.warning("Same offset (%s) for %s and %s", (hex(offset),
+                                                                       name,
+                                                                       self._symbol_pool.getby_offset(offset)))
+                        continue
+
 
 
 class ContainerUnknown(Container):

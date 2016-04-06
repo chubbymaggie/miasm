@@ -9,6 +9,7 @@ from miasm2.core.utils import *
 from miasm2.core.bin_stream import bin_stream_vm
 from miasm2.ir.ir2C import init_arch_C
 from miasm2.core.interval import interval
+from miasm2.jitter.emulatedsymbexec import EmulatedSymbExec
 
 hnd = logging.StreamHandler()
 hnd.setFormatter(logging.Formatter("[%(levelname)s]: %(message)s"))
@@ -18,6 +19,7 @@ log.setLevel(logging.CRITICAL)
 log_func = logging.getLogger('jit function call')
 log_func.addHandler(hnd)
 log_func.setLevel(logging.CRITICAL)
+
 
 try:
     from miasm2.jitter.jitcore_tcc import JitCore_Tcc
@@ -57,16 +59,17 @@ def named_arguments(func):
             arg_vals = namedtuple("args", args)(*arg_vals)
             # func_name(arguments) return address
             log_func.info('%s(%s) ret addr: %s',
-                whoami(),
-                ', '.join("%s=0x%x" % (field, value)
-                          for field, value in arg_vals._asdict().iteritems()),
-                hex(ret_ad))
+                          get_caller_name(1),
+                          ', '.join("%s=0x%x" % (field, value)
+                                    for field, value in arg_vals._asdict(
+                                    ).iteritems()),
+                         hex(ret_ad))
             return ret_ad, namedtuple("args", args)(*arg_vals)
         else:
             ret_ad, arg_vals = func(self, args)
             # func_name(arguments) return address
             log_func.info('%s(%s) ret addr: %s',
-                whoami(),
+                get_caller_name(1),
                 ', '.join(hex(arg) for arg in arg_vals),
                 hex(ret_ad))
             return ret_ad, arg_vals
@@ -201,10 +204,12 @@ class jitter:
 
         self.vm = VmMngr.Vm()
         self.cpu = jcore.JitCpu()
-
-        self.bs = bin_stream_vm(self.vm)
         self.ir_arch = ir_arch
+        self.bs = bin_stream_vm(self.vm)
         init_arch_C(self.arch)
+
+        self.symbexec = EmulatedSymbExec(self.cpu, self.ir_arch, {})
+        self.symbexec.reset_regs()
 
         if jit_type == "tcc":
             self.jit = JitCore_Tcc(self.ir_arch, self.bs)
@@ -227,7 +232,6 @@ class jitter:
         self.cpu.jitter = self.jit
         self.stack_size = 0x10000
         self.stack_base = 0x1230000
-
 
         # Init callback handler
         self.breakpoints_handler = CallbackHandler()
@@ -264,7 +268,6 @@ class jitter:
         # De-jit previously jitted blocks
         self.jit.addr_mod = interval([(addr, addr)])
         self.jit.updt_automod_code(self.vm)
-
 
     def set_breakpoint(self, addr, *args):
         """Set callbacks associated with addr.
@@ -359,7 +362,8 @@ class jitter:
 
     def init_stack(self):
         self.vm.add_memory_page(
-            self.stack_base, PAGE_READ | PAGE_WRITE, "\x00" * self.stack_size)
+            self.stack_base, PAGE_READ | PAGE_WRITE, "\x00" * self.stack_size,
+            "Stack")
         sp = self.arch.getsp(self.attrib)
         setattr(self.cpu, sp.name, self.stack_base + self.stack_size)
         # regs = self.cpu.get_gpreg()
@@ -377,7 +381,7 @@ class jitter:
         l = 0
         tmp = addr
         while ((max_char is None or l < max_char) and
-            self.vm.get_mem(tmp, 1) != "\x00"):
+               self.vm.get_mem(tmp, 1) != "\x00"):
             tmp += 1
             l += 1
         return self.vm.get_mem(addr, l)
@@ -389,7 +393,7 @@ class jitter:
         l = 0
         tmp = addr
         while ((max_char is None or l < max_char) and
-            self.vm.get_mem(tmp, 2) != "\x00\x00"):
+               self.vm.get_mem(tmp, 2) != "\x00\x00"):
             tmp += 2
             l += 2
         s = self.vm.get_mem(addr, l)
@@ -417,9 +421,14 @@ class jitter:
         else:
             log.debug('%r', fname)
             raise ValueError('unknown api', hex(jitter.pc), repr(fname))
-        func(jitter)
+        ret = func(jitter)
         jitter.pc = getattr(jitter.cpu, jitter.ir_arch.pc.name)
-        return True
+
+        # Don't break on a None return
+        if ret is None:
+            return True
+        else:
+            return ret
 
     def handle_function(self, f_addr):
         """Add a brakpoint which will trigger the function handler"""
@@ -438,3 +447,12 @@ class jitter:
 
         for f_addr in libs.fad2cname:
             self.handle_function(f_addr)
+
+    def eval_expr(self, expr):
+        """Eval expression @expr in the context of the current instance. Side
+        effects are passed on it"""
+        self.symbexec.update_engine_from_cpu()
+        ret = self.symbexec.apply_expr(expr)
+        self.symbexec.update_cpu_from_engine()
+
+        return ret

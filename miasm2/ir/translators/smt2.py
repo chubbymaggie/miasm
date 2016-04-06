@@ -220,8 +220,6 @@ class TranslatorSMT2(Translator):
                     res = bvshl(res, arg)
                 elif expr.op == ">>":
                     res = bvlshr(res, arg)
-                elif expr.op == "a<<":
-                    res = bvshl(res, arg)
                 elif expr.op == "a>>":
                     res = bvashr(res, arg)
                 elif expr.op == "<<<":
@@ -237,6 +235,45 @@ class TranslatorSMT2(Translator):
                 res = bvxor(res, bv_extract(i, i, arg))
         elif expr.op == '-':
             res = bvneg(res)
+        elif expr.op == "bsf":
+            src = res
+            size = expr.size
+            size_smt2 = bit_vec_val(size, size)
+            one_smt2 = bit_vec_val(1, size)
+            zero_smt2 = bit_vec_val(0, size)
+            # src & (1 << (size - 1))
+            op = bvand(src, bvshl(one_smt2, bvsub(size_smt2, one_smt2)))
+            # op != 0
+            cond = smt2_distinct(op, zero_smt2)
+            # ite(cond, size - 1, src)
+            res = smt2_ite(cond, bvsub(size_smt2, one_smt2), src)
+            for i in xrange(size - 2, -1, -1):
+                # smt2 expression of i
+                i_smt2 = bit_vec_val(i, size)
+                # src & (1 << i)
+                op = bvand(src, bvshl(one_smt2, i_smt2))
+                # op != 0
+                cond = smt2_distinct(op, zero_smt2)
+                # ite(cond, i, res)
+                res = smt2_ite(cond, i_smt2, res)
+        elif expr.op == "bsr":
+            src = res
+            size = expr.size
+            one_smt2 = bit_vec_val(1, size)
+            zero_smt2 = bit_vec_val(0, size)
+            # (src & 1) != 0
+            cond = smt2_distinct(bvand(src, one_smt2), zero_smt2)
+            # ite(cond, 0, src)
+            res= smt2_ite(cond, zero_smt2, src)
+            for i in xrange(size - 1, 0, -1):
+                index = - i % size
+                index_smt2 = bit_vec_val(index, size)
+                # src & (1 << index)
+                op = bvand(src, bvshl(one_smt2, index_smt2))
+                # op != 0
+                cond = smt2_distinct(op, zero_smt2)
+                # ite(cond, index, res)
+                res = smt2_ite(cond, index_smt2, res)
         else:
             raise NotImplementedError("Unsupported OP yet: %s" % expr.op)
 
@@ -247,13 +284,14 @@ class TranslatorSMT2(Translator):
         dst = self.from_expr(expr.dst)
         return smt2_assert(smt2_eq(src, dst))
 
-    def to_smt2(self, exprs, logic="QF_ABV"):
+    def to_smt2(self, exprs, logic="QF_ABV", model=False):
         """
         Converts a valid SMT2 file for a given list of
         SMT2 expressions.
 
         :param exprs: list of SMT2 expressions
         :param logic: SMT2 logic
+        :param model: model generation flag
         :return: String of the SMT2 file
         """
         ret = ""
@@ -275,6 +313,10 @@ class TranslatorSMT2(Translator):
 
         # define action
         ret += "(check-sat)\n"
+
+        # enable model generation
+        if model:
+            ret += "(get-model)\n"
 
         return ret
 

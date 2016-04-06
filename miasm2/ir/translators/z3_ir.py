@@ -165,8 +165,6 @@ class TranslatorZ3(Translator):
                     res = z3.LShR(res, arg)
                 elif expr.op == "a>>":
                     res = res >> arg
-                elif expr.op == "a<<":
-                    res = res << arg
                 elif expr.op == "<<<":
                     res = z3.RotateLeft(res, arg)
                 elif expr.op == ">>>":
@@ -188,6 +186,19 @@ class TranslatorZ3(Translator):
                 res = res ^ z3.Extract(i, i, arg)
         elif expr.op == '-':
             res = -res
+        elif expr.op == "bsf":
+            size = expr.size
+            src = res
+            res = z3.If((src & (1 << (size - 1))) != 0, size - 1, src)
+            for i in xrange(size - 2, -1, -1):
+                res = z3.If((src & (1 << i)) != 0, i, res)
+        elif expr.op == "bsr":
+            size = expr.size
+            src = res
+            res = z3.If((src & 1) != 0, 0, src)
+            for i in xrange(size - 1, 0, -1):
+                index = - i % size
+                res = z3.If((src & (1 << index)) != 0, index, res)
         else:
             raise NotImplementedError("Unsupported OP yet: %s" % expr.op)
 
