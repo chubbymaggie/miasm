@@ -1,8 +1,9 @@
 #! /usr/bin/env python
-from asm_test import Asm_Test
 import sys
 
-class Test_PUNPCKHBW(Asm_Test):
+from asm_test import Asm_Test_32
+
+class Test_PUNPCKHBW(Asm_Test_32):
     TXT = '''
     main:
        CALL      next
@@ -21,7 +22,7 @@ class Test_PUNPCKHBW(Asm_Test):
         assert self.myjit.cpu.MM1 == 0xAA11BB22CC33DD44
 
 
-class Test_PUNPCKHWD(Asm_Test):
+class Test_PUNPCKHWD(Asm_Test_32):
     TXT = '''
     main:
        CALL      next
@@ -41,7 +42,7 @@ class Test_PUNPCKHWD(Asm_Test):
 
 
 
-class Test_PUNPCKHDQ(Asm_Test):
+class Test_PUNPCKHDQ(Asm_Test_32):
     TXT = '''
     main:
        CALL      next
@@ -62,7 +63,7 @@ class Test_PUNPCKHDQ(Asm_Test):
 
 
 
-class Test_PUNPCKLBW(Asm_Test):
+class Test_PUNPCKLBW(Asm_Test_32):
     TXT = '''
     main:
        CALL      next
@@ -81,7 +82,7 @@ class Test_PUNPCKLBW(Asm_Test):
         assert self.myjit.cpu.MM1 == 0xEE55FF6602770188
 
 
-class Test_PUNPCKLWD(Asm_Test):
+class Test_PUNPCKLWD(Asm_Test_32):
     TXT = '''
     main:
        CALL      next
@@ -101,7 +102,7 @@ class Test_PUNPCKLWD(Asm_Test):
 
 
 
-class Test_PUNPCKLDQ(Asm_Test):
+class Test_PUNPCKLDQ(Asm_Test_32):
     TXT = '''
     main:
        CALL      next
@@ -120,5 +121,5 @@ class Test_PUNPCKLDQ(Asm_Test):
         assert self.myjit.cpu.MM1 == 0xEEFF020155667788
 
 if __name__ == "__main__":
-    [test()() for test in [Test_PUNPCKHBW, Test_PUNPCKHWD, Test_PUNPCKHDQ,
-                           Test_PUNPCKLBW, Test_PUNPCKLWD, Test_PUNPCKLDQ,]]
+    [test(*sys.argv[1:])() for test in [Test_PUNPCKHBW, Test_PUNPCKHWD, Test_PUNPCKHDQ,
+                                        Test_PUNPCKLBW, Test_PUNPCKLWD, Test_PUNPCKLDQ,]]

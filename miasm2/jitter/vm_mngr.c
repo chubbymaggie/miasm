@@ -41,6 +41,41 @@
 #define MAX(a,b)  (((a)>(b))?(a):(b))
 
 
+const uint8_t parity_table[256] = {
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    CC_P, 0, 0, CC_P, 0, CC_P, CC_P, 0,
+    0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
+};
+
 //#define DEBUG_MIASM_AUTOMOD_CODE
 
 
@@ -103,7 +138,7 @@ int find_page_node(struct memory_page_node * array, uint64_t key, int imin, int 
 	return -1;
 }
 
-struct memory_page_node * get_memory_page_from_address(vm_mngr_t* vm_mngr, uint64_t ad)
+struct memory_page_node * get_memory_page_from_address(vm_mngr_t* vm_mngr, uint64_t ad, int raise_exception)
 {
 	struct memory_page_node * mpn;
 	int i;
@@ -111,14 +146,16 @@ struct memory_page_node * get_memory_page_from_address(vm_mngr_t* vm_mngr, uint6
 	i = find_page_node(vm_mngr->memory_pages_array,
 			   ad,
 			   0,
-			   vm_mngr->memory_pages_number);
+			   vm_mngr->memory_pages_number - 1);
 	if (i >= 0) {
 		mpn = &vm_mngr->memory_pages_array[i];
 		if ((mpn->ad <= ad) && (ad < mpn->ad + mpn->size))
 			return mpn;
 	}
-	fprintf(stderr, "WARNING: address 0x%"PRIX64" is not mapped in virtual memory:\n", ad);
-	vm_mngr->exception_flags |= EXCEPT_ACCESS_VIOL;
+	if (raise_exception) {
+		fprintf(stderr, "WARNING: address 0x%"PRIX64" is not mapped in virtual memory:\n", ad);
+		vm_mngr->exception_flags |= EXCEPT_ACCESS_VIOL;
+	}
 	return NULL;
 }
 
@@ -133,7 +170,7 @@ static uint64_t memory_page_read(vm_mngr_t* vm_mngr, unsigned int my_size, uint6
 	struct memory_breakpoint_info * b;
 
 
-	mpn = get_memory_page_from_address(vm_mngr, ad);
+	mpn = get_memory_page_from_address(vm_mngr, ad, 1);
 	if (!mpn)
 		return 0;
 
@@ -182,11 +219,11 @@ static uint64_t memory_page_read(vm_mngr_t* vm_mngr, unsigned int my_size, uint6
 		unsigned int new_size = my_size;
 		int index = 0;
 		while (new_size){
-			mpn = get_memory_page_from_address(vm_mngr, ad);
+			mpn = get_memory_page_from_address(vm_mngr, ad, 1);
 			if (!mpn)
 				return 0;
 			addr = &((unsigned char*)mpn->ad_hp)[ad - mpn->ad];
-			ret |= (*((unsigned char*)addr)&0xFF)<<(index);
+			ret |= ((uint64_t)(*((unsigned char*)addr)&0xFF))<<(index);
 			index +=8;
 			new_size -= 8;
 			ad ++;
@@ -219,7 +256,7 @@ static void memory_page_write(vm_mngr_t* vm_mngr, unsigned int my_size,
 	unsigned char * addr;
 	struct memory_breakpoint_info * b;
 
-	mpn = get_memory_page_from_address(vm_mngr, ad);
+	mpn = get_memory_page_from_address(vm_mngr, ad, 1);
 	if (!mpn)
 		return;
 
@@ -283,7 +320,7 @@ static void memory_page_write(vm_mngr_t* vm_mngr, unsigned int my_size,
 			break;
 		}
 		while (my_size){
-			mpn = get_memory_page_from_address(vm_mngr, ad);
+			mpn = get_memory_page_from_address(vm_mngr, ad, 1);
 			if (!mpn)
 				return;
 
@@ -459,7 +496,7 @@ int vm_read_mem(vm_mngr_t* vm_mngr, uint64_t addr, char** buffer_ptr, uint64_t s
 
        /* read is multiple page wide */
        while (size){
-	      mpn = get_memory_page_from_address(vm_mngr, addr);
+	      mpn = get_memory_page_from_address(vm_mngr, addr, 1);
 	      if (!mpn){
 		      free(*buffer_ptr);
 		      PyErr_SetString(PyExc_RuntimeError, "Error: cannot find address");
@@ -485,7 +522,7 @@ int vm_write_mem(vm_mngr_t* vm_mngr, uint64_t addr, char *buffer, uint64_t size)
 
        /* write is multiple page wide */
        while (size){
-	      mpn = get_memory_page_from_address(vm_mngr, addr);
+	      mpn = get_memory_page_from_address(vm_mngr, addr, 1);
 	      if (!mpn){
 		      PyErr_SetString(PyExc_RuntimeError, "Error: cannot find address");
 		      return -1;
@@ -503,23 +540,24 @@ int vm_write_mem(vm_mngr_t* vm_mngr, uint64_t addr, char *buffer, uint64_t size)
 
 
 
-unsigned int parity(unsigned int a)
+int is_mapped(vm_mngr_t* vm_mngr, uint64_t addr, uint64_t size)
 {
-#if defined(__builtin_parity)
-	return __builtin_parity(a);
-#else
-    unsigned int tmp, cpt;
+       uint64_t len;
+       struct memory_page_node * mpn;
 
-    tmp = a&0xFF;
-    cpt = 1;
-    while (tmp!=0){
-	    cpt^=tmp&1;
-	    tmp>>=1;
-    }
-    return cpt;
-#endif
+       /* test multiple page wide */
+       while (size){
+	      mpn = get_memory_page_from_address(vm_mngr, addr, 0);
+	      if (!mpn)
+		      return 0;
+
+	      len = MIN(size, mpn->size - (addr - mpn->ad));
+	      addr += len;
+	      size -= len;
+       }
+
+       return 1;
 }
-
 
 int shift_right_arith(unsigned int size, int a, unsigned int b)
 {
@@ -1362,6 +1400,13 @@ void init_memory_breakpoint(vm_mngr_t* vm_mngr)
 
 void reset_memory_page_pool(vm_mngr_t* vm_mngr)
 {
+	struct memory_page_node * mpn;
+	int i;
+	for (i=0;i<vm_mngr->memory_pages_number; i++) {
+		mpn = &vm_mngr->memory_pages_array[i];
+		free(mpn->ad_hp);
+		free(mpn->name);
+	}
 	free(vm_mngr->memory_pages_array);
 	vm_mngr->memory_pages_array = NULL;
 	vm_mngr->memory_pages_number = 0;

@@ -1,8 +1,9 @@
 #! /usr/bin/env python
-from asm_test import Asm_Test
 import sys
 
-class Test_PCMPEQB(Asm_Test):
+from asm_test import Asm_Test_32
+
+class Test_PCMPEQB(Asm_Test_32):
     TXT = '''
     main:
        CALL    next
@@ -21,7 +22,7 @@ class Test_PCMPEQB(Asm_Test):
         assert self.myjit.cpu.MM1 == 0xFF00000000FF0000
 
 
-class Test_PCMPEQW(Asm_Test):
+class Test_PCMPEQW(Asm_Test_32):
     TXT = '''
     main:
        CALL    next
@@ -41,7 +42,7 @@ class Test_PCMPEQW(Asm_Test):
 
 
 
-class Test_PCMPEQD(Asm_Test):
+class Test_PCMPEQD(Asm_Test_32):
     TXT = '''
     main:
        CALL    next
@@ -61,4 +62,4 @@ class Test_PCMPEQD(Asm_Test):
 
 
 if __name__ == "__main__":
-    [test()() for test in [Test_PCMPEQB, Test_PCMPEQW, Test_PCMPEQD]]
+    [test(*sys.argv[1:])() for test in [Test_PCMPEQB, Test_PCMPEQW, Test_PCMPEQD]]

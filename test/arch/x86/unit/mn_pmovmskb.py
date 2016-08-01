@@ -1,8 +1,9 @@
 #! /usr/bin/env python
-from asm_test import Asm_Test
 import sys
 
-class Test_PMOVMSKB(Asm_Test):
+from asm_test import Asm_Test_32
+
+class Test_PMOVMSKB(Asm_Test_32):
     TXT = '''
     main:
        CALL      next
@@ -23,4 +24,4 @@ class Test_PMOVMSKB(Asm_Test):
         assert self.myjit.cpu.EAX == 0x00000015
 
 if __name__ == "__main__":
-    [test()() for test in [Test_PMOVMSKB,]]
+    [test(*sys.argv[1:])() for test in [Test_PMOVMSKB,]]

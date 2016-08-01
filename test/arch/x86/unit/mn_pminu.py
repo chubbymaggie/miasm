@@ -1,8 +1,9 @@
 #! /usr/bin/env python
-from asm_test import Asm_Test
 import sys
 
-class Test_PMINU(Asm_Test):
+from asm_test import Asm_Test_32
+
+class Test_PMINU(Asm_Test_32):
     TXT = '''
     main:
        CALL   next
@@ -22,4 +23,4 @@ class Test_PMINU(Asm_Test):
 
 
 if __name__ == "__main__":
-    [test()() for test in [Test_PMINU]]
+    [test(*sys.argv[1:])() for test in [Test_PMINU]]

@@ -1,8 +1,10 @@
 #! /usr/bin/env python
-from asm_test import Asm_Test
+import sys
+
+from asm_test import Asm_Test_32
 
 
-class Test_DAS(Asm_Test):
+class Test_DAS(Asm_Test_32):
     TXT = '''
     main:
        MOV     EBP, ESP
@@ -103,4 +105,4 @@ array_al_end:
 
 
 if __name__ == "__main__":
-    [test()() for test in [Test_DAS]]
+    [test(*sys.argv[1:])() for test in [Test_DAS]]

@@ -72,6 +72,8 @@ reg_tests = [
     (m64, "XXXXXXXX    CPUID",
     "0fa2"),
 
+    (m32, "XXXXXXXX    SETALC",
+    "D6"),
 
     (m32, "XXXXXXXX    PMINSW     MM0, QWORD PTR [EAX]",
     "0fea00"),
@@ -789,6 +791,13 @@ reg_tests = [
      "ff1403"),
     (m64, "00000000    CALL       QWORD PTR [RAX+RBX+0x11223344]",
      "ff941844332211"),
+
+    (m64, "XXXXXXXX    CALL       QWORD PTR [EAX+EBX]",
+    "67ff1418"),
+    (m64, "XXXXXXXX    CALL       QWORD PTR [0x11223344]",
+    "ff142544332211"),
+    (m64, "XXXXXXXX    CALL       QWORD PTR [RIP+0x11223344]",
+    "ff1544332211"),
 
 
     (m32, "00000000    CALL       FAR DWORD PTR [EAX]",
@@ -1737,7 +1746,8 @@ reg_tests = [
      "0f1818"),
     (m32, "00000000    PREFETCHNTA BYTE PTR [EAX]",
      "0f1800"),
-
+    (m64, "00000000    PREFETCHW  BYTE PTR [RDI]",
+     "0f0d0f"),
 
     (m16, "00000000    PUSHW      AX",
      "50"),
@@ -2127,6 +2137,8 @@ reg_tests = [
     (m32, "00000000    LIDT       DWORD PTR [EAX]",
      "0f0118"),
 
+    (m64, "00000000    LFENCE",
+     "0faee8"),
 
 
     (m32, "00000000    SUB        AL, 0x11",
@@ -2214,6 +2226,9 @@ reg_tests = [
     (m32, "00000000    NOP",
      "90"),
 
+    (m64, "00000000    XCHG       RAX, R8",
+     "4990"),
+
 
     (m32, "00000000    XCHG       BYTE PTR [EAX], AL",
      "8600"),
@@ -2288,6 +2303,8 @@ reg_tests = [
 
     (m32, "00000000    MOVUPS     XMM2, XMMWORD PTR [ECX]",
      "0f1011"),
+    (m64, "00000000    MOVUPS     XMMWORD PTR [RCX+0x50], XMM1",
+     "0f114950"),
     (m32, "00000000    MOVSD      XMM2, QWORD PTR [ECX]",
      "f20f1011"),
     (m32, "00000000    MOVSD      XMM2, XMM1",
@@ -2304,6 +2321,9 @@ reg_tests = [
 
     (m64, "00000000    MOVSS      DWORD PTR [RBP+0xFFFFFFFFFFFFFC00], XMM0",
      "f30f118500fcffff"),
+
+    (m64, "00000000    MOVMSKPS   EAX, XMM2",
+     "0f50c2"),
 
     (m32, "00000000    ADDSS      XMM2, DWORD PTR [ECX]",
      "f30f5811"),
@@ -2662,6 +2682,8 @@ reg_tests = [
     "0F72D605"),
     (m32, "00000000    PSRLD      XMM6, 0x5",
     "660F72D605"),
+    (m64, "00000000    PSRLDQ     XMM0, 0x8",
+     "660f73d808"),
     (m32, "00000000    PSRLW      MM6, 0x5",
     "0F71D605"),
     (m32, "00000000    PSRLW      XMM6, 0x5",
@@ -2753,6 +2775,10 @@ reg_tests = [
     (m32, "00000000    PCMPEQD    XMM2, XMMWORD PTR [EDX]",
     "660F7612"),
 
+    (m64, "00000000    PCMPGTD    MM3, MM0",
+     "0f66d8"),
+    (m64, "00000000    PCMPGTD    XMM3, XMM0",
+     "660f66d8"),
 
     (m32, "00000000    PUNPCKHBW  MM2, QWORD PTR [EDX]",
     "0F6812"),
@@ -2885,6 +2911,11 @@ reg_tests = [
      "0FD7C7"),
     (m32, "00000000    PMOVMSKB   EAX, XMM7",
      "660FD7C7"),
+
+    (m64, "00000000    SHUFPS     XMM0, XMM6, 0x44",
+     "0fc6c644"),
+    (m64, "00000000    SHUFPD     XMM0, XMM6, 0x44",
+     "660fc6c644"),
 
 
 ]

@@ -1064,51 +1064,45 @@ def popfw(ir, instr):
         m2_expr.ExprAff(mRSP[instr.mode], mRSP[instr.mode] + m2_expr.ExprInt(2, mRSP[instr.mode].size)))
     return e, []
 
+pa_regs = [
+    mRAX, mRCX,
+    mRDX, mRBX,
+    mRSP, mRBP,
+    mRSI, mRDI
+]
+
+def pusha_gen(ir, instr, size):
+    e = []
+    for i, reg in enumerate(pa_regs):
+        stk_ptr = mRSP[instr.mode] + m2_expr.ExprInt(-(reg[size].size / 8) * (i + 1), instr.mode)
+        e.append(m2_expr.ExprAff(m2_expr.ExprMem(stk_ptr, reg[size].size), reg[size]))
+    e.append(m2_expr.ExprAff(mRSP[instr.mode], stk_ptr))
+    return e, []
+
+def pusha(ir, instr):
+    return pusha_gen(ir, instr, 16)
 
 def pushad(ir, instr):
+    return pusha_gen(ir, instr, 32)
+
+def popa_gen(ir, instr, size):
     e = []
-    s = instr.v_opmode()
-    opmode, admode = s, instr.v_admode()
-    if not s in [16, 32, 64]:
-        raise ValueError('bad size stacker!')
+    for i, reg in enumerate(reversed(pa_regs)):
+        if reg == mRSP:
+            continue
+        stk_ptr = mRSP[instr.mode] + m2_expr.ExprInt((reg[size].size / 8) * i, instr.mode)
+        e.append(m2_expr.ExprAff(reg[size], m2_expr.ExprMem(stk_ptr, instr.mode)))
 
-    regs = [
-        mRAX[instr.mode][:s], mRCX[instr.mode][
-            :s], mRDX[instr.mode][:s], mRBX[instr.mode][:s],
-        mRSP[instr.mode][:s], mRBP[instr.mode][:s],
-        mRSI[instr.mode][:s], mRDI[instr.mode][:s]]
+    stk_ptr = mRSP[instr.mode] + m2_expr.ExprInt((instr.mode / 8) * (i + 1), instr.mode)
+    e.append(m2_expr.ExprAff(mRSP[instr.mode], stk_ptr))
 
-    for i in xrange(len(regs)):
-        c = mRSP[instr.mode][:s] + m2_expr.ExprInt(-(s / 8) * (i + 1), s)
-        e.append(m2_expr.ExprAff(m2_expr.ExprMem(c, s), regs[i]))
-    e.append(m2_expr.ExprAff(mRSP[instr.mode][:s], c))
     return e, []
 
+def popa(ir, instr):
+    return popa_gen(ir, instr, 16)
 
 def popad(ir, instr):
-    e = []
-    s = instr.v_opmode()
-    opmode, admode = s, instr.v_admode()
-    if not s in [16, 32, 64]:
-        raise ValueError('bad size stacker!')
-    regs = [
-        mRAX[instr.mode][:s], mRCX[instr.mode][
-            :s], mRDX[instr.mode][:s], mRBX[instr.mode][:s],
-        mRSP[instr.mode][:s], mRBP[instr.mode][:s],
-        mRSI[instr.mode][:s], mRDI[instr.mode][:s]]
-    myesp = mRSP[instr.mode][:s]
-    regs.reverse()
-    for i in xrange(len(regs)):
-        if regs[i] == myesp:
-            continue
-        c = myesp + m2_expr.ExprInt_from(myesp, ((s / 8) * i))
-        e.append(m2_expr.ExprAff(regs[i], m2_expr.ExprMem(c, s)))
-
-    c = myesp + m2_expr.ExprInt_from(myesp, ((s / 8) * (i + 1)))
-    e.append(m2_expr.ExprAff(myesp, c))
-
-    return e, []
-
+    return popa_gen(ir, instr, 32)
 
 def call(ir, instr, dst):
     e = []
@@ -1454,7 +1448,7 @@ def idiv(ir, instr, a):
 
     if size == 8:
         b = mRAX[instr.mode][:16]
-    elif size in [16, 32]:
+    elif size in [16, 32, 64]:
         s1, s2 = mRDX[size], mRAX[size]
         b = m2_expr.ExprCompose([(s2, 0, size),
                                  (s1, size, size * 2)])
@@ -1670,7 +1664,10 @@ def lods(ir, instr, size):
     e1 = irbloc(lbl_df_1.name, [e1])
 
     e = []
-    e.append(m2_expr.ExprAff(b, m2_expr.ExprMem(addr, size)))
+    if instr.mode == 64 and b.size == 32:
+        e.append(m2_expr.ExprAff(mRAX[instr.mode], m2_expr.ExprMem(addr, size).zeroExtend(64)))
+    else:
+        e.append(m2_expr.ExprAff(b, m2_expr.ExprMem(addr, size)))
 
     e.append(m2_expr.ExprAff(ir.IRDst,
                              m2_expr.ExprCond(df, lbl_df_1, lbl_df_0)))
@@ -2558,7 +2555,20 @@ def fcmovnu(ir, instr, arg1, arg2):
 
 def nop(ir, instr, a=None):
     return [], []
-
+    
+def prefetchw(ir, instr, a=None):
+    # see 4-201 on this documentation 
+    # https://www-ssl.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-instruction-set-reference-manual-325383.pdf
+    return [], []
+    
+def lfence(ir, instr, a=None):
+    # see 3-485 on this documentation 
+    # https://www-ssl.intel.com/content/dam/www/public/us/en/documents/manuals/64-ia-32-architectures-software-developer-instruction-set-reference-manual-325383.pdf
+    return [], []
+    
+def ud2(ir, instr, a=None):
+    e = [m2_expr.ExprAff(exception_flags, m2_expr.ExprInt(EXCEPT_ILLEGAL_INSN, exception_flags.size))]
+    return e, []
 
 def hlt(ir, instr):
     e = []
@@ -4043,10 +4053,10 @@ mnemo_func = {'mov': mov,
               'popfd': popfd,
               'popfq': popfd,
               'popfw': popfw,
+              'pusha': pusha,
               'pushad': pushad,
-              'pusha': pushad,
               'popad': popad,
-              'popa': popad,
+              'popa': popa,
               'call': call,
               'ret': ret,
               'retf': retf,
@@ -4125,6 +4135,9 @@ mnemo_func = {'mov': mov,
               'fcomi': fcomi,
               'fcomip': fcomip,
               'nop': nop,
+              'ud2': ud2,
+              'prefetchw':prefetchw,
+              'lfence':lfence,
               'fnop': nop,  # XXX
               'hlt': hlt,
               'rdtsc': rdtsc,
@@ -4471,7 +4484,6 @@ class ir_x86_16(ir):
 
         instr_ir, extra_ir = mnemo_func[
             instr.name.lower()](self, instr, *args)
-        self.mod_pc(instr, instr_ir, extra_ir)
 
         self.mod_pc(instr, instr_ir, extra_ir)
         instr.additional_info.except_on_instr = False

@@ -174,10 +174,15 @@ uint64_t MEM_LOOKUP_64_PASSTHROUGH(uint64_t addr);
 int vm_read_mem(vm_mngr_t* vm_mngr, uint64_t addr, char** buffer_ptr, uint64_t size);
 int vm_write_mem(vm_mngr_t* vm_mngr, uint64_t addr, char *buffer, uint64_t size);
 
+#define CC_P 1
 
-unsigned int parity(unsigned int a);
+extern const uint8_t parity_table[256];
+
+#define parity(a) (parity_table[(a) & 0xFF])
+
 unsigned int my_imul08(unsigned int a, unsigned int b);
 
+int is_mapped(vm_mngr_t* vm_mngr, uint64_t addr, uint64_t size);
 void vm_throw(vm_mngr_t* vm_mngr, unsigned long flags);
 int shift_right_arith(unsigned int size, int a, unsigned int b);
 
@@ -200,6 +205,7 @@ unsigned int umul16_hi(unsigned short a, unsigned short b);
 uint64_t rot_left(uint64_t size, uint64_t a, uint64_t b);
 uint64_t rot_right(uint64_t size, uint64_t a, uint64_t b);
 unsigned int rcl_rez_op(unsigned int size, unsigned int a, unsigned int b, unsigned int cf);
+unsigned int rcr_rez_op(unsigned int size, unsigned int a, unsigned int b, unsigned int cf);
 
 
 #define UDIV(sizeA)						\
@@ -312,7 +318,7 @@ void func_alloc(void);
 unsigned int get_memory_page_max_address_py(void);
 unsigned int get_memory_page_max_user_address_py(void);
 unsigned int get_memory_page_from_min_ad_py(unsigned int size);
-struct memory_page_node * get_memory_page_from_address(vm_mngr_t*, uint64_t ad);
+struct memory_page_node * get_memory_page_from_address(vm_mngr_t*, uint64_t ad, int raise_exception);
 void func_malloc_memory_page(void);
 void func_free_memory_page(void);
 void func_virtualalloc_memory_page(void);
@@ -376,6 +382,8 @@ unsigned int load_tr_segment_selector(unsigned int d);
 	((((short)(a)) >> ((int)(b)&0x1f))&0xffff)
 #define shift_right_arith_32(a, b)\
 	((((int)(a)) >> ((int)(b)&0x1f))&0xffffffff)
+#define shift_right_arith_64(a, b)\
+	((((int64_t)(a)) >> ((int64_t)(b)&0x3f))&0xffffffffffffffff)
 
 
 #define shift_right_logic_08(a, b)\
@@ -385,7 +393,7 @@ unsigned int load_tr_segment_selector(unsigned int d);
 #define shift_right_logic_32(a, b)\
 	((((unsigned int)(a)) >> ((unsigned int)(b)&0x1f))&0xffffffff)
 #define shift_right_logic_64(a, b)\
-	((((int64_t)(a)) >> ((int64_t)(b)&0x3f))&0xffffffffffffffff)
+	((((uint64_t)(a)) >> ((uint64_t)(b)&0x3f))&0xffffffffffffffff)
 
 #define shift_left_logic_08(a, b)\
 	(((a)<<((b)&0x1f))&0xff)

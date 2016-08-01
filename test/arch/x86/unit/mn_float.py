@@ -1,8 +1,10 @@
 #! /usr/bin/env python
-from asm_test import Asm_Test
+import sys
+
+from asm_test import Asm_Test_32
 
 
-class Test_FADD(Asm_Test):
+class Test_FADD(Asm_Test_32):
     TXT = '''
     main:
        ; test float
@@ -19,4 +21,4 @@ class Test_FADD(Asm_Test):
 
 
 if __name__ == "__main__":
-    [test()() for test in [Test_FADD]]
+    [test(*sys.argv[1:])() for test in [Test_FADD]]

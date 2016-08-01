@@ -826,6 +826,13 @@ class mn_x86(cls_mn):
         self.rex_b.value = pre_dis_info['rex_b']
         self.rex_x.value = pre_dis_info['rex_x']
         self.rex_p.value = pre_dis_info['rex_p']
+
+        if hasattr(self, 'no_rex') and\
+           (self.rex_r.value or self.rex_b.value or
+            self.rex_x.value or self.rex_p.value):
+            return False
+
+
         self.g1.value = pre_dis_info['g1']
         self.g2.value = pre_dis_info['g2']
         self.prefix = pre_dis_info['prefix']
@@ -853,6 +860,10 @@ class mn_x86(cls_mn):
             rex |= 0x1
         if rex != 0x40 or self.rex_p.value == 1:
             v = chr(rex) + v
+            if hasattr(self, 'no_rex'):
+                return None
+
+
 
         if hasattr(self, 'prefixed'):
             v = self.prefixed.default + v
@@ -1738,7 +1749,9 @@ def parse_mem(expr, parent, w8, sx=0, xmm=0, mm=0):
         else:
             return None, None, False
 
-    if (parent.mode == 64 and ptr.size == 32 and
+    if (not isinstance(ptr, ExprInt) and
+        parent.mode == 64 and
+        ptr.size == 32 and
         parent.admode != 1):
         return None, None, False
     dct_expr = {f_isad: True}
@@ -1980,6 +1993,7 @@ class x86_rm_arg(m_arg):
             v = v.items()
             v.sort()
             v = tuple(v)
+            admode = 64 if p.mode == 64 else admode
             if not v in modrm2byte[admode]:
                 continue
             xx = modrm2byte[admode][v]
@@ -3081,6 +3095,8 @@ pref_f3 = bs(l=0, fname="prefixed", default="\xf3")
 pref_66 = bs(l=0, fname="prefixed", default="\x66")
 no_xmm_pref = bs(l=0, fname="no_xmm_pref")
 
+no_rex = bs(l=0, fname="no_rex")
+
 sib_scale = bs(l=2, cls=(bs_cond_scale,), fname = "sib_scale")
 sib_index = bs(l=3, cls=(bs_cond_index,), fname = "sib_index")
 sib_base = bs(l=3, cls=(bs_cond_index,), fname = "sib_base")
@@ -3617,6 +3633,7 @@ addop("lgs", [bs8(0x0f), bs8(0xb5)] + rmmod(rmreg, rm_arg_x=rm_mem, modrm=mod_me
 addop("lgdt", [bs8(0x0f), bs8(0x01)] + rmmod(d2, modrm=mod_mem))
 addop("lidt", [bs8(0x0f), bs8(0x01)] + rmmod(d3, modrm=mod_mem))
 
+addop("lfence", [bs8(0x0f), bs8(0xae), bs8(0xe8)])
 
 addop("leave", [bs8(0xc9), stk])
 
@@ -3649,8 +3666,8 @@ addop("movsq", [bs8(0xa5), bs_opmode64])
 addop("movsx", [bs8(0x0f), bs("1011111"), w8, sx] + rmmod(rmreg, rm_arg_sx))
 addop("movsxd", [bs8(0x63), sxd, bs_mode64] + rmmod(rmreg, rm_arg_sxd))
 
-addop("movups",
-      [bs8(0x0f), bs8(0x10), no_xmm_pref] + rmmod(xmm_reg, rm_arg_xmm))
+addop("movups", [bs8(0x0f), bs("0001000"), swapargs, no_xmm_pref] +
+      rmmod(xmm_reg, rm_arg_xmm), [xmm_reg, rm_arg_xmm])
 addop("movsd", [bs8(0x0f), bs("0001000"), swapargs, pref_f2]
       + rmmod(xmm_reg, rm_arg_xmm_m64), [xmm_reg, rm_arg_xmm_m64])
 addop("movss", [bs8(0x0f), bs("0001000"), swapargs, pref_f3] +
@@ -3673,6 +3690,8 @@ addop("movq", [bs8(0x0f), bs8(0x7e), pref_f3] +
 addop("movq", [bs8(0x0f), bs8(0xd6), pref_66] +
       rmmod(xmm_reg, rm_arg_xmm_m64), [rm_arg_xmm_m64, xmm_reg])
 
+addop("movmskps", [bs8(0x0f), bs8(0x50), no_xmm_pref] +
+      rmmod(reg, rm_arg_xmm_reg))
 
 
 addop("addss", [bs8(0x0f), bs8(0x58), pref_f3] + rmmod(xmm_reg, rm_arg_xmm_m32))
@@ -3717,6 +3736,7 @@ addop("outsw", [bs8(0x6f), bs_opmode16])
 addop("outsd", [bs8(0x6f), bs_opmode32])
 addop("outsd", [bs8(0x6f), bs_opmode64])
 
+addop("setalc", [bs8(0xD6)])
 
 # addop("pause", [bs8(0xf3), bs8(0x90)])
 
@@ -3756,6 +3776,7 @@ addop("prefetch0", [bs8(0x0f), bs8(0x18)] + rmmod(d1, rm_arg_m08))
 addop("prefetch1", [bs8(0x0f), bs8(0x18)] + rmmod(d2, rm_arg_m08))
 addop("prefetch2", [bs8(0x0f), bs8(0x18)] + rmmod(d3, rm_arg_m08))
 addop("prefetchnta", [bs8(0x0f), bs8(0x18)] + rmmod(d0, rm_arg_m08))
+addop("prefetchw", [bs8(0x0f), bs8(0x0d)] + rmmod(d1, rm_arg_m08))
 
 addop("pushw", [bs8(0xff), stk, bs_opmode16] + rmmod(d6))
 addop("pushw", [bs("01010"), stk, reg, bs_opmode16])
@@ -3891,7 +3912,7 @@ addop("wrmsr", [bs8(0x0f), bs8(0x30)])
 addop("xadd", [bs8(0x0f), bs("1100000"), w8]
       + rmmod(rmreg, rm_arg_w8), [rm_arg_w8, rmreg])
 
-addop("nop", [bs8(0x90)], alias=True)
+addop("nop", [bs8(0x90), no_rex], alias=True)
 
 addop("xchg", [bs('10010'), d_eax, reg])
 addop("xchg", [bs('1000011'), w8] +
@@ -4127,6 +4148,8 @@ addop("psrld", [bs8(0x0f), bs8(0xd2), no_xmm_pref] +
 addop("psrld", [bs8(0x0f), bs8(0xd2), pref_66] +
       rmmod(xmm_reg, rm_arg_xmm), [xmm_reg, rm_arg_xmm])
 
+addop("psrldq", [bs8(0x0f), bs8(0x73), pref_66] +
+      rmmod(d3, rm_arg_xmm) + [u08], [rm_arg_xmm, u08])
 
 addop("psrlw", [bs8(0x0f), bs8(0x71), no_xmm_pref] +
       rmmod(d2, rm_arg_mm) + [u08], [rm_arg_mm, u08])
@@ -4210,6 +4233,11 @@ addop("pcmpeqw", [bs8(0x0f), bs8(0x75), pref_66] +
 addop("pcmpeqd", [bs8(0x0f), bs8(0x76), no_xmm_pref] +
       rmmod(mm_reg, rm_arg_mm))
 addop("pcmpeqd", [bs8(0x0f), bs8(0x76), pref_66] +
+      rmmod(xmm_reg, rm_arg_xmm))
+
+addop("pcmpgtd", [bs8(0x0f), bs8(0x66), no_xmm_pref] +
+      rmmod(mm_reg, rm_arg_mm))
+addop("pcmpgtd", [bs8(0x0f), bs8(0x66), pref_66] +
       rmmod(xmm_reg, rm_arg_xmm))
 
 
@@ -4310,6 +4338,11 @@ addop("pmovmskb", [bs8(0x0f), bs8(0xd7), no_xmm_pref] +
       rmmod(reg, rm_arg_mm_reg))
 addop("pmovmskb", [bs8(0x0f), bs8(0xd7), pref_66] +
       rmmod(reg, rm_arg_xmm_reg))
+
+addop("shufps", [bs8(0x0f), bs8(0xc6), no_xmm_pref] +
+      rmmod(xmm_reg, rm_arg_xmm) + [u08])
+addop("shufpd", [bs8(0x0f), bs8(0xc6), pref_66] +
+      rmmod(xmm_reg, rm_arg_xmm) + [u08])
 
 
 mn_x86.bintree = factor_one_bit(mn_x86.bintree)
