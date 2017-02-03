@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 
 import logging
 from functools import wraps
@@ -7,9 +6,10 @@ from collections import Sequence, namedtuple, Iterator
 from miasm2.jitter.csts import *
 from miasm2.core.utils import *
 from miasm2.core.bin_stream import bin_stream_vm
-from miasm2.ir.ir2C import init_arch_C
 from miasm2.core.interval import interval
 from miasm2.jitter.emulatedsymbexec import EmulatedSymbExec
+from miasm2.jitter.codegen import CGen
+from miasm2.jitter.jitcore_cc_base import JitCore_Cc_Base
 
 hnd = logging.StreamHandler()
 hnd.setFormatter(logging.Formatter("[%(levelname)s]: %(message)s"))
@@ -161,11 +161,14 @@ class jitter:
 
     "Main class for JIT handling"
 
+    C_Gen = CGen
+
     def __init__(self, ir_arch, jit_type="tcc"):
         """Init an instance of jitter.
         @ir_arch: ir instance for this architecture
         @jit_type: JiT backend to use. Available options are:
             - "tcc"
+            - "gcc"
             - "llvm"
             - "python"
         """
@@ -194,9 +197,8 @@ class jitter:
         self.cpu = jcore.JitCpu()
         self.ir_arch = ir_arch
         self.bs = bin_stream_vm(self.vm)
-        init_arch_C(self.arch)
 
-        self.symbexec = EmulatedSymbExec(self.cpu, self.ir_arch, {})
+        self.symbexec = EmulatedSymbExec(self.cpu, self.vm, self.ir_arch, {})
         self.symbexec.reset_regs()
 
         try:
@@ -214,13 +216,15 @@ class jitter:
             raise RuntimeError('Unsupported jitter: %s' % jit_type)
 
         self.jit = JitCore(self.ir_arch, self.bs)
+        if isinstance(self.jit, JitCore_Cc_Base):
+            self.jit.init_codegen(self.C_Gen(self.ir_arch))
+        elif jit_type == "python":
+            self.jit.set_cpu_vm(self.cpu, self.vm)
 
         self.cpu.init_regs()
         self.vm.init_memory_page_pool()
         self.vm.init_code_bloc_pool()
         self.vm.init_memory_breakpoint()
-
-        self.vm.set_addr2obj(self.jit.addr2obj)
 
         self.jit.load()
         self.cpu.vmmngr = self.vm
@@ -261,8 +265,7 @@ class jitter:
         self.breakpoints_handler.add_callback(addr, callback)
         self.jit.add_disassembly_splits(addr)
         # De-jit previously jitted blocks
-        self.jit.addr_mod = interval([(addr, addr)])
-        self.jit.updt_automod_code(self.vm)
+        self.jit.updt_automod_code_range(self.vm, [(addr, addr)])
 
     def set_breakpoint(self, addr, *args):
         """Set callbacks associated with addr.
@@ -291,7 +294,7 @@ class jitter:
         """Wrapper on JiT backend. Run the code at PC and return the next PC.
         @pc: address of code to run"""
 
-        return self.jit.runbloc(self.cpu, self.vm, pc, self.breakpoints_handler.callbacks)
+        return self.jit.runbloc(self.cpu, pc, self.breakpoints_handler.callbacks)
 
     def runiter_once(self, pc):
         """Iterator on callbacks results on code running from PC.
@@ -320,7 +323,11 @@ class jitter:
         exception_flag = self.get_exception()
         for res in self.exceptions_handler(exception_flag, self):
             if res is not True:
-                yield res
+                if isinstance(res, collections.Iterator):
+                    for tmp in res:
+                        yield tmp
+                else:
+                    yield res
 
         # If a callback changed pc, re call every callback
         if old_pc != self.pc:
@@ -336,7 +343,11 @@ class jitter:
         exception_flag = self.get_exception()
         for res in self.exceptions_handler(exception_flag, self):
             if res is not True:
-                yield res
+                if isinstance(res, collections.Iterator):
+                    for tmp in res:
+                        yield tmp
+                else:
+                    yield res
 
     def init_run(self, pc):
         """Create an iterator on pc with runiter.

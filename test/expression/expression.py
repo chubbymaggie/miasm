@@ -5,7 +5,13 @@ from pdb import pm
 from miasm2.expression.expression import *
 from miasm2.expression.expression_helper import *
 
+# Expression comparison
 assert(ExprInt64(-1) != ExprInt64(-2))
+assert(ExprInt64(1) != ExprInt32(1))
+
+# Expression size
+big_cst = ExprInt(1, size=0x1000)
+assert big_cst.size == 0x1000
 
 # Possible values
 #- Common constants
@@ -30,10 +36,10 @@ for expr in [
         A + cst1,
         A + ExprCond(cond1, cst1, cst2),
         ExprCond(cond1, cst1, cst2) + ExprCond(cond2, cst3, cst4),
-        ExprCompose([(A, 0, 32), (cst1, 32, 64)]),
-        ExprCompose([(ExprCond(cond1, cst1, cst2), 0, 32), (A, 32, 64)]),
-        ExprCompose([(ExprCond(cond1, cst1, cst2), 0, 32),
-                     (ExprCond(cond2, cst3, cst4), 32, 64)]),
+        ExprCompose(A, cst1),
+        ExprCompose(ExprCond(cond1, cst1, cst2), A),
+        ExprCompose(ExprCond(cond1, cst1, cst2),
+                    ExprCond(cond2, cst3, cst4)),
         ExprCond(ExprCond(cond1, cst1, cst2), cst3, cst4),
 ]:
     print "*" * 80
@@ -45,3 +51,17 @@ for expr in [
         print "For value %s" % consval.value
         for constraint in consval.constraints:
             print "\t%s" % constraint.to_constraint()
+
+# Repr
+for expr in [
+        cst1,
+        A,
+        ExprMem(cst1, 32),
+        ExprCond(cond1, cst1, cst2),
+        A + cst1,
+        ExprCompose(A, cst1),
+        A.msb(),
+        ExprAff(A, cst1),
+]:
+    print repr(expr)
+    assert expr == eval(repr(expr))

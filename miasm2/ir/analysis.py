@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 import logging
@@ -29,16 +28,32 @@ class ira(ir):
         """Returns ids of all registers used in the IR"""
         return self.arch.regs.all_regs_ids + [self.IRDst]
 
-    def call_effects(self, ad):
-        """
-        Default simulation of a function call to @ad
+    def call_effects(self, ad, instr):
+        """Default modelisation of a function call to @ad. This may be used to:
+
+        * insert dependencies to arguments (stack base, registers, ...)
+        * add some side effects (stack clean, return value, ...)
+
         @ad: (Expr) address of the called function
+        @instr: native instruction which is responsible of the call
         """
+
         return [AssignBlock(
             [ExprAff(self.ret_reg, ExprOp('call_func_ret', ad, self.sp)),
              ExprAff(self.sp, ExprOp(
                  'call_func_stack', ad, self.sp)),
              ])]
+
+    def pre_add_instr(self, block, instr, irb_cur, ir_blocks_all, gen_pc_update):
+        """Replace function call with corresponding call effects,
+        inside the IR block"""
+        if not instr.is_subcall():
+            return irb_cur
+        call_effects = self.call_effects(instr.args[0], instr)
+        for assignblk in call_effects:
+            irb_cur.irs.append(assignblk)
+            irb_cur.lines.append(instr)
+        return None
 
     def remove_dead_instr(self, irb, useful):
         """Remove dead affectations using previous reaches analysis
@@ -283,11 +298,8 @@ class ira(ir):
 
     def gen_equations(self):
         for irb in self.blocs.values():
-            symbols_init = {}
-            for r in self.arch.regs.all_regs_ids:
-                x = ExprId(r.name, r.size)
-                x.is_term = True
-                symbols_init[r] = x
+            symbols_init = dict(self.arch.regs.all_regs_ids_init)
+
             sb = symbexec(self, dict(symbols_init))
             sb.emulbloc(irb)
             eqs = []

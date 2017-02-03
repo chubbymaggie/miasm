@@ -70,8 +70,8 @@ OF(A-B) = ((A XOR D) AND (A XOR B)) < 0
 
 def update_flag_zf(a):
     return [m2_expr.ExprAff(
-        zf, m2_expr.ExprCond(a, m2_expr.ExprInt_from(zf, 0),
-                             m2_expr.ExprInt_from(zf, 1)))]
+        zf, m2_expr.ExprCond(a, m2_expr.ExprInt(0, zf.size),
+                             m2_expr.ExprInt(1, zf.size)))]
 
 
 def update_flag_nf(a):
@@ -81,7 +81,7 @@ def update_flag_nf(a):
 def update_flag_pf(a):
     return [m2_expr.ExprAff(pf,
                             m2_expr.ExprOp('parity',
-                                           a & m2_expr.ExprInt_from(a, 0xFF)))]
+                                           a & m2_expr.ExprInt(0xFF, a.size)))]
 
 
 def update_flag_af(op1, op2, res):
@@ -99,8 +99,8 @@ def update_flag_znp(a):
 def update_flag_logic(a):
     e = []
     e += update_flag_znp(a)
-    e.append(m2_expr.ExprAff(of, m2_expr.ExprInt_from(of, 0)))
-    e.append(m2_expr.ExprAff(cf, m2_expr.ExprInt_from(cf, 0)))
+    e.append(m2_expr.ExprAff(of, m2_expr.ExprInt(0, of.size)))
+    e.append(m2_expr.ExprAff(cf, m2_expr.ExprInt(0, cf.size)))
     return e
 
 
@@ -169,7 +169,7 @@ def set_float_cs_eip(instr):
     e = []
     # XXX TODO check float updt
     e.append(m2_expr.ExprAff(float_eip,
-                             m2_expr.ExprInt_from(float_eip, instr.offset)))
+                             m2_expr.ExprInt(instr.offset, float_eip.size)))
     e.append(m2_expr.ExprAff(float_cs, CS))
     return e
 
@@ -297,6 +297,10 @@ def movsx(ir, instr, a, b):
 
 def lea(ir, instr, a, b):
     src = b.arg
+    if b.is_op_segm():
+        # Do not use segmentation here
+        src = src.args[1]
+
     if src.size > a.size:
         src = src[:a.size]
     e = [m2_expr.ExprAff(a, src.zeroExtend(a.size))]
@@ -327,9 +331,7 @@ def xadd(ir, instr, a, b):
 
 def adc(ir, instr, a, b):
     e = []
-    c = a + (b + m2_expr.ExprCompose([(m2_expr.ExprInt(0, a.size - 1),
-                                       1, a.size),
-                                      (cf, 0, 1)]))
+    c = a + (b + m2_expr.ExprCompose(cf, m2_expr.ExprInt(0, a.size - 1)))
     e += update_flag_arith(c)
     e += update_flag_af(a, b, c)
     e += update_flag_add(a, b, c)
@@ -351,9 +353,7 @@ def sub(ir, instr, a, b):
 
 def sbb(ir, instr, a, b):
     e = []
-    c = a - (b + m2_expr.ExprCompose([(m2_expr.ExprInt(0, a.size - 1),
-                                       1, a.size),
-                                      (cf, 0, 1)]))
+    c = a - (b + m2_expr.ExprCompose(cf, m2_expr.ExprInt(0, a.size - 1)))
     e += update_flag_arith(c)
     e += update_flag_af(a, b, c)
     e += update_flag_sub(a, b, c)
@@ -363,7 +363,7 @@ def sbb(ir, instr, a, b):
 
 def neg(ir, instr, b):
     e = []
-    a = m2_expr.ExprInt_from(b, 0)
+    a = m2_expr.ExprInt(0, b.size)
 
     c = a - b
     e += update_flag_arith(c)
@@ -430,13 +430,13 @@ def l_test(ir, instr, a, b):
 def get_shift(a, b):
     # b.size must match a
     if isinstance(b, m2_expr.ExprInt):
-        b = m2_expr.ExprInt(int(b.arg), a.size)
+        b = m2_expr.ExprInt(int(b), a.size)
     else:
         b = b.zeroExtend(a.size)
     if a.size == 64:
-        shift = b & m2_expr.ExprInt_from(b, 0x3f)
+        shift = b & m2_expr.ExprInt(0x3f, b.size)
     else:
-        shift = b & m2_expr.ExprInt_from(b, 0x1f)
+        shift = b & m2_expr.ExprInt(0x1f, b.size)
     shift = expr_simp(shift)
     return shift
 
@@ -472,7 +472,7 @@ def _rotate_tpl(ir, instr, a, b, op, left=False, include_cf=False):
 
     # Don't generate conditional shifter on constant
     if isinstance(shifter, m2_expr.ExprInt):
-        if int(shifter.arg) != 0:
+        if int(shifter) != 0:
             return e_do, []
         else:
             return [], []
@@ -519,7 +519,7 @@ def _shift_tpl(op, ir, instr, a, b, c=None, op_inv=None, left=False,
 
     res = m2_expr.ExprOp(op, a, shifter)
     cf_from_dst = m2_expr.ExprOp(op, a,
-                                 (shifter - m2_expr.ExprInt_from(a, 1)))
+                                 (shifter - m2_expr.ExprInt(1, a.size)))
     cf_from_dst = cf_from_dst.msb() if left else cf_from_dst[:1]
 
     new_cf = cf_from_dst
@@ -561,7 +561,7 @@ def _shift_tpl(op, ir, instr, a, b, c=None, op_inv=None, left=False,
     e_do = [
         m2_expr.ExprAff(cf, new_cf),
         m2_expr.ExprAff(of, m2_expr.ExprCond(shifter - i1,
-                                             m2_expr.ExprInt_from(of, 0),
+                                             m2_expr.ExprInt(0, of.size),
                                              value_of)),
         m2_expr.ExprAff(a, res),
     ]
@@ -569,7 +569,7 @@ def _shift_tpl(op, ir, instr, a, b, c=None, op_inv=None, left=False,
 
     # Don't generate conditional shifter on constant
     if isinstance(shifter, m2_expr.ExprInt):
-        if int(shifter.arg) != 0:
+        if int(shifter) != 0:
             return e_do, []
         else:
             return [], []
@@ -607,33 +607,33 @@ def shld(ir, instr, a, b, c):
 
 # XXX todo ###
 def cmc(ir, instr):
-    e = [m2_expr.ExprAff(cf, m2_expr.ExprCond(cf, m2_expr.ExprInt_from(cf, 0),
-                                              m2_expr.ExprInt_from(cf, 1)))]
+    e = [m2_expr.ExprAff(cf, m2_expr.ExprCond(cf, m2_expr.ExprInt(0, cf.size),
+                                              m2_expr.ExprInt(1, cf.size)))]
     return e, []
 
 
 def clc(ir, instr):
-    e = [m2_expr.ExprAff(cf, m2_expr.ExprInt_from(cf, 0))]
+    e = [m2_expr.ExprAff(cf, m2_expr.ExprInt(0, cf.size))]
     return e, []
 
 
 def stc(ir, instr):
-    e = [m2_expr.ExprAff(cf, m2_expr.ExprInt_from(cf, 1))]
+    e = [m2_expr.ExprAff(cf, m2_expr.ExprInt(1, cf.size))]
     return e, []
 
 
 def cld(ir, instr):
-    e = [m2_expr.ExprAff(df, m2_expr.ExprInt_from(df, 0))]
+    e = [m2_expr.ExprAff(df, m2_expr.ExprInt(0, df.size))]
     return e, []
 
 
 def std(ir, instr):
-    e = [m2_expr.ExprAff(df, m2_expr.ExprInt_from(df, 1))]
+    e = [m2_expr.ExprAff(df, m2_expr.ExprInt(1, df.size))]
     return e, []
 
 
 def cli(ir, instr):
-    e = [m2_expr.ExprAff(i_f, m2_expr.ExprInt_from(i_f, 0))]
+    e = [m2_expr.ExprAff(i_f, m2_expr.ExprInt(0, i_f.size))]
     return e, []
 
 
@@ -644,7 +644,7 @@ def sti(ir, instr):
 
 def inc(ir, instr, a):
     e = []
-    b = m2_expr.ExprInt_from(a, 1)
+    b = m2_expr.ExprInt(1, a.size)
     c = a + b
     e += update_flag_arith(c)
     e += update_flag_af(a, b, c)
@@ -656,7 +656,7 @@ def inc(ir, instr, a):
 
 def dec(ir, instr, a):
     e = []
-    b = m2_expr.ExprInt_from(a, -1)
+    b = m2_expr.ExprInt(-1, a.size)
     c = a + b
     e += update_flag_arith(c)
     e += update_flag_af(a, b, ~c)
@@ -678,7 +678,7 @@ def push_gen(ir, instr, a, size):
         raise ValueError('strange arg size')
 
     sp = mRSP[instr.mode]
-    new_sp = sp - m2_expr.ExprInt_from(sp, size / 8)
+    new_sp = sp - m2_expr.ExprInt(size / 8, sp.size)
     e.append(m2_expr.ExprAff(sp, new_sp))
     if ir.do_stk_segm:
         new_sp = m2_expr.ExprOp('segm', SS, new_sp)
@@ -700,7 +700,7 @@ def pop_gen(ir, instr, a, size):
         raise ValueError('bad size stacker!')
 
     sp = mRSP[instr.mode]
-    new_sp = sp + m2_expr.ExprInt_from(sp, size / 8)
+    new_sp = sp + m2_expr.ExprInt(size / 8, sp.size)
     # don't generate ESP incrementation on POP ESP
     if a != ir.sp:
         e.append(m2_expr.ExprAff(sp, new_sp))
@@ -725,16 +725,16 @@ def popw(ir, instr, a):
 def sete(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(zf, m2_expr.ExprInt_from(a, 1),
-                                            m2_expr.ExprInt_from(a, 0))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(zf, m2_expr.ExprInt(1, a.size),
+                                            m2_expr.ExprInt(0, a.size))))
     return e, []
 
 
 def setnz(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(zf, m2_expr.ExprInt_from(a, 0),
-                                            m2_expr.ExprInt_from(a, 1))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(zf, m2_expr.ExprInt(0, a.size),
+                                            m2_expr.ExprInt(1, a.size))))
     return e, []
 
 
@@ -742,15 +742,15 @@ def setl(ir, instr, a):
     e = []
     e.append(
         m2_expr.ExprAff(
-            a, m2_expr.ExprCond(nf - of, m2_expr.ExprInt_from(a, 1),
-                                m2_expr.ExprInt_from(a, 0))))
+            a, m2_expr.ExprCond(nf - of, m2_expr.ExprInt(1, a.size),
+                                m2_expr.ExprInt(0, a.size))))
     return e, []
 
 
 def setg(ir, instr, a):
     e = []
-    a0 = m2_expr.ExprInt_from(a, 0)
-    a1 = m2_expr.ExprInt_from(a, 1)
+    a0 = m2_expr.ExprInt(0, a.size)
+    a1 = m2_expr.ExprInt(1, a.size)
     ret = m2_expr.ExprCond(zf, a0, a1) & m2_expr.ExprCond(nf - of, a0, a1)
     e.append(m2_expr.ExprAff(a, ret))
     return e, []
@@ -760,16 +760,16 @@ def setge(ir, instr, a):
     e = []
     e.append(
         m2_expr.ExprAff(
-            a, m2_expr.ExprCond(nf - of, m2_expr.ExprInt_from(a, 0),
-                                m2_expr.ExprInt_from(a, 1))))
+            a, m2_expr.ExprCond(nf - of, m2_expr.ExprInt(0, a.size),
+                                m2_expr.ExprInt(1, a.size))))
     return e, []
 
 
 def seta(ir, instr, a):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprCond(cf | zf,
-                                                 m2_expr.ExprInt_from(a, 0),
-                                                 m2_expr.ExprInt_from(a, 1))))
+                                                 m2_expr.ExprInt(0, a.size),
+                                                 m2_expr.ExprInt(1, a.size))))
 
     return e, []
 
@@ -777,24 +777,24 @@ def seta(ir, instr, a):
 def setae(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt_from(a, 0),
-                                            m2_expr.ExprInt_from(a, 1))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt(0, a.size),
+                                            m2_expr.ExprInt(1, a.size))))
     return e, []
 
 
 def setb(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt_from(a, 1),
-                                            m2_expr.ExprInt_from(a, 0))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt(1, a.size),
+                                            m2_expr.ExprInt(0, a.size))))
     return e, []
 
 
 def setbe(ir, instr, a):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprCond(cf | zf,
-                                                 m2_expr.ExprInt_from(a, 1),
-                                                 m2_expr.ExprInt_from(a, 0)))
+                                                 m2_expr.ExprInt(1, a.size),
+                                                 m2_expr.ExprInt(0, a.size)))
              )
     return e, []
 
@@ -802,47 +802,47 @@ def setbe(ir, instr, a):
 def setns(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(nf, m2_expr.ExprInt_from(a, 0),
-                                            m2_expr.ExprInt_from(a, 1))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(nf, m2_expr.ExprInt(0, a.size),
+                                            m2_expr.ExprInt(1, a.size))))
     return e, []
 
 
 def sets(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(nf, m2_expr.ExprInt_from(a, 1),
-                                            m2_expr.ExprInt_from(a, 0))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(nf, m2_expr.ExprInt(1, a.size),
+                                            m2_expr.ExprInt(0, a.size))))
     return e, []
 
 
 def seto(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(of, m2_expr.ExprInt_from(a, 1),
-                                            m2_expr.ExprInt_from(a, 0))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(of, m2_expr.ExprInt(1, a.size),
+                                            m2_expr.ExprInt(0, a.size))))
     return e, []
 
 
 def setp(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(pf, m2_expr.ExprInt_from(a, 1),
-                                            m2_expr.ExprInt_from(a, 0))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(pf, m2_expr.ExprInt(1, a.size),
+                                            m2_expr.ExprInt(0, a.size))))
     return e, []
 
 
 def setnp(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(pf, m2_expr.ExprInt_from(a, 0),
-                                            m2_expr.ExprInt_from(a, 1))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(pf, m2_expr.ExprInt(0, a.size),
+                                            m2_expr.ExprInt(1, a.size))))
     return e, []
 
 
 def setle(ir, instr, a):
     e = []
-    a0 = m2_expr.ExprInt_from(a, 0)
-    a1 = m2_expr.ExprInt_from(a, 1)
+    a0 = m2_expr.ExprInt(0, a.size)
+    a1 = m2_expr.ExprInt(1, a.size)
     ret = m2_expr.ExprCond(zf, a1, a0) | m2_expr.ExprCond(nf ^ of, a1, a0)
     e.append(m2_expr.ExprAff(a, ret))
     return e, []
@@ -850,8 +850,8 @@ def setle(ir, instr, a):
 
 def setna(ir, instr, a):
     e = []
-    a0 = m2_expr.ExprInt_from(a, 0)
-    a1 = m2_expr.ExprInt_from(a, 1)
+    a0 = m2_expr.ExprInt(0, a.size)
+    a1 = m2_expr.ExprInt(1, a.size)
     ret = m2_expr.ExprCond(cf, a1, a0) & m2_expr.ExprCond(zf, a1, a0)
     e.append(m2_expr.ExprAff(a, ret))
     return e, []
@@ -860,8 +860,8 @@ def setna(ir, instr, a):
 def setnbe(ir, instr, a):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprCond(cf | zf,
-                                                 m2_expr.ExprInt_from(a, 0),
-                                                 m2_expr.ExprInt_from(a, 1)))
+                                                 m2_expr.ExprInt(0, a.size),
+                                                 m2_expr.ExprInt(1, a.size)))
              )
     return e, []
 
@@ -869,16 +869,16 @@ def setnbe(ir, instr, a):
 def setno(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(of, m2_expr.ExprInt_from(a, 0),
-                                            m2_expr.ExprInt_from(a, 1))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(of, m2_expr.ExprInt(0, a.size),
+                                            m2_expr.ExprInt(1, a.size))))
     return e, []
 
 
 def setnb(ir, instr, a):
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt_from(a, 0),
-                                            m2_expr.ExprInt_from(a, 1))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt(0, a.size),
+                                            m2_expr.ExprInt(1, a.size))))
     return e, []
 
 
@@ -886,33 +886,20 @@ def setalc(ir, instr):
     a = mRAX[instr.mode][0:8]
     e = []
     e.append(
-        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt_from(a, 0xff),
-                                            m2_expr.ExprInt_from(a, 0))))
+        m2_expr.ExprAff(a, m2_expr.ExprCond(cf, m2_expr.ExprInt(0xff, a.size),
+                                            m2_expr.ExprInt(0, a.size))))
     return e, []
 
 
 def bswap(ir, instr, a):
     e = []
     if a.size == 16:
-        c = m2_expr.ExprCompose([(a[:8],        8, 16),
-                                 (a[8:16],      0,  8),
-                                 ])
+        c = m2_expr.ExprCompose(a[8:16], a[:8])
     elif a.size == 32:
-        c = m2_expr.ExprCompose([(a[:8],      24, 32),
-                                 (a[8:16],    16, 24),
-                                 (a[16:24],   8, 16),
-                                 (a[24:32],   0, 8),
-                                 ])
+        c = m2_expr.ExprCompose(a[24:32], a[16:24], a[8:16], a[:8])
     elif a.size == 64:
-        c = m2_expr.ExprCompose([(a[:8],      56, 64),
-                                 (a[8:16],    48, 56),
-                                 (a[16:24],   40, 48),
-                                 (a[24:32],   32, 40),
-                                 (a[32:40],   24, 32),
-                                 (a[40:48],   16, 24),
-                                 (a[48:56],    8, 16),
-                                 (a[56:64],    0, 8),
-                                 ])
+        c = m2_expr.ExprCompose(a[56:64], a[48:56], a[40:48], a[32:40],
+                                a[24:32], a[16:24], a[8:16], a[:8])
     else:
         raise ValueError('the size DOES matter')
     e.append(m2_expr.ExprAff(a, c))
@@ -932,17 +919,17 @@ def cmps(ir, instr, size):
 
     e0 = []
     e0.append(m2_expr.ExprAff(a.arg,
-                              a.arg + m2_expr.ExprInt_from(a.arg, size / 8)))
+                              a.arg + m2_expr.ExprInt(size / 8, a.arg.size)))
     e0.append(m2_expr.ExprAff(b.arg,
-                              b.arg + m2_expr.ExprInt_from(b.arg, size / 8)))
+                              b.arg + m2_expr.ExprInt(size / 8, b.arg.size)))
     e0.append(m2_expr.ExprAff(ir.IRDst, lbl_next))
     e0 = irbloc(lbl_df_0.name, [e0])
 
     e1 = []
     e1.append(m2_expr.ExprAff(a.arg,
-                              a.arg - m2_expr.ExprInt_from(a.arg, size / 8)))
+                              a.arg - m2_expr.ExprInt(size / 8, a.arg.size)))
     e1.append(m2_expr.ExprAff(b.arg,
-                              b.arg - m2_expr.ExprInt_from(b.arg, size / 8)))
+                              b.arg - m2_expr.ExprInt(size / 8, b.arg.size)))
     e1.append(m2_expr.ExprAff(ir.IRDst, lbl_next))
     e1 = irbloc(lbl_df_1.name, [e1])
 
@@ -963,13 +950,13 @@ def scas(ir, instr, size):
 
     e0 = []
     e0.append(m2_expr.ExprAff(a.arg,
-                              a.arg + m2_expr.ExprInt_from(a.arg, size / 8)))
+                              a.arg + m2_expr.ExprInt(size / 8, a.arg.size)))
     e0.append(m2_expr.ExprAff(ir.IRDst, lbl_next))
     e0 = irbloc(lbl_df_0.name, [e0])
 
     e1 = []
     e1.append(m2_expr.ExprAff(a.arg,
-                              a.arg - m2_expr.ExprInt_from(a.arg, size / 8)))
+                              a.arg - m2_expr.ExprInt(size / 8, a.arg.size)))
     e1.append(m2_expr.ExprAff(ir.IRDst, lbl_next))
     e1 = irbloc(lbl_df_1.name, [e1])
 
@@ -982,24 +969,18 @@ def scas(ir, instr, size):
 def compose_eflag(s=32):
     args = []
 
-    regs = [cf, m2_expr.ExprInt1(1), pf, m2_expr.ExprInt1(
-        0), af, m2_expr.ExprInt1(0), zf, nf, tf, i_f, df, of]
-    for i in xrange(len(regs)):
-        args.append((regs[i], i, i + 1))
-
-    args.append((iopl, 12, 14))
+    args = [cf, m2_expr.ExprInt1(1), pf, m2_expr.ExprInt1(0), af,
+            m2_expr.ExprInt1(0), zf, nf, tf, i_f, df, of, iopl]
 
     if s == 32:
-        regs = [nt, m2_expr.ExprInt1(0), rf, vm, ac, vif, vip, i_d]
+        args += [nt, m2_expr.ExprInt1(0), rf, vm, ac, vif, vip, i_d]
     elif s == 16:
-        regs = [nt, m2_expr.ExprInt1(0)]
+        args += [nt, m2_expr.ExprInt1(0)]
     else:
         raise ValueError('unk size')
-    for i in xrange(len(regs)):
-        args.append((regs[i], i + 14, i + 15))
     if s == 32:
-        args.append((m2_expr.ExprInt(0, 10), 22, 32))
-    return m2_expr.ExprCompose(args)
+        args.append(m2_expr.ExprInt(0, 10))
+    return m2_expr.ExprCompose(*args)
 
 
 def pushfd(ir, instr):
@@ -1035,7 +1016,7 @@ def popfd(ir, instr):
     e.append(m2_expr.ExprAff(vip, m2_expr.ExprSlice(tmp, 20, 21)))
     e.append(m2_expr.ExprAff(i_d, m2_expr.ExprSlice(tmp, 21, 22)))
     e.append(m2_expr.ExprAff(mRSP[instr.mode],
-                             mRSP[instr.mode] + m2_expr.ExprInt_from(mRSP[instr.mode], instr.mode / 8)))
+                             mRSP[instr.mode] + m2_expr.ExprInt(instr.mode / 8, mRSP[instr.mode].size)))
     e.append(m2_expr.ExprAff(exception_flags,
                              m2_expr.ExprCond(m2_expr.ExprSlice(tmp, 8, 9),
                                               m2_expr.ExprInt32(
@@ -1126,7 +1107,7 @@ def call(ir, instr, dst):
             # Far call far [eax]
             addr = dst.args[0].arg
             m1 = m2_expr.ExprMem(addr, CS.size)
-            m2 = m2_expr.ExprMem(addr + m2_expr.ExprInt_from(addr, 2),
+            m2 = m2_expr.ExprMem(addr + m2_expr.ExprInt(2, addr.size),
                                  meip.size)
         else:
             raise RuntimeError("bad call operator")
@@ -1172,7 +1153,7 @@ def ret(ir, instr, a=None):
         a = m2_expr.ExprInt(0, s)
         value = (myesp + (m2_expr.ExprInt((s / 8), s)))
     else:
-        a = m2_expr.ExprInt(int(a.arg), s)
+        a = m2_expr.ExprInt(int(a), s)
         value = (myesp + (m2_expr.ExprInt((s / 8), s) + a))
 
     e.append(m2_expr.ExprAff(myesp, value))
@@ -1260,7 +1241,7 @@ def jmp(ir, instr, dst):
             # Far jmp far [eax]
             addr = dst.args[0].arg
             m1 = m2_expr.ExprMem(addr, CS.size)
-            m2 = m2_expr.ExprMem(addr + m2_expr.ExprInt_from(addr, 2),
+            m2 = m2_expr.ExprMem(addr + m2_expr.ExprInt(2, addr.size),
                                  meip.size)
         else:
             raise RuntimeError("bad jmp operator")
@@ -1362,7 +1343,7 @@ def loop(ir, instr, dst):
     myecx = mRCX[instr.mode][:admode]
 
     n = m2_expr.ExprId(ir.get_next_label(instr), ir.IRDst.size)
-    c = myecx - m2_expr.ExprInt_from(myecx, 1)
+    c = myecx - m2_expr.ExprInt(1, myecx.size)
     dst_o = m2_expr.ExprCond(c,
                              dst.zeroExtend(ir.IRDst.size),
                              n.zeroExtend(ir.IRDst.size))
@@ -1385,7 +1366,7 @@ def loopne(ir, instr, dst):
                          m2_expr.ExprInt1(0))
     c &= zf ^ m2_expr.ExprInt1(1)
 
-    e.append(m2_expr.ExprAff(myecx, myecx - m2_expr.ExprInt_from(myecx, 1)))
+    e.append(m2_expr.ExprAff(myecx, myecx - m2_expr.ExprInt(1, myecx.size)))
     dst_o = m2_expr.ExprCond(c,
                              dst.zeroExtend(ir.IRDst.size),
                              n.zeroExtend(ir.IRDst.size))
@@ -1405,7 +1386,7 @@ def loope(ir, instr, dst):
                          m2_expr.ExprInt1(1),
                          m2_expr.ExprInt1(0))
     c &= zf
-    e.append(m2_expr.ExprAff(myecx, myecx - m2_expr.ExprInt_from(myecx, 1)))
+    e.append(m2_expr.ExprAff(myecx, myecx - m2_expr.ExprInt(1, myecx.size)))
     dst_o = m2_expr.ExprCond(c,
                              dst.zeroExtend(ir.IRDst.size),
                              n.zeroExtend(ir.IRDst.size))
@@ -1422,8 +1403,7 @@ def div(ir, instr, a):
         b = mRAX[instr.mode][:16]
     elif size in [16, 32, 64]:
         s1, s2 = mRDX[size], mRAX[size]
-        b = m2_expr.ExprCompose([(s2, 0, size),
-                                 (s1, size, size * 2)])
+        b = m2_expr.ExprCompose(s2, s1)
     else:
         raise ValueError('div arg not impl', a)
 
@@ -1432,8 +1412,7 @@ def div(ir, instr, a):
 
     # if 8 bit div, only ax is affected
     if size == 8:
-        e.append(m2_expr.ExprAff(b, m2_expr.ExprCompose([(c_d[:8], 0, 8),
-                                                         (c_r[:8], 8, 16)])))
+        e.append(m2_expr.ExprAff(b, m2_expr.ExprCompose(c_d[:8], c_r[:8])))
     else:
         e.append(m2_expr.ExprAff(s1, c_r[:size]))
         e.append(m2_expr.ExprAff(s2, c_d[:size]))
@@ -1450,8 +1429,7 @@ def idiv(ir, instr, a):
         b = mRAX[instr.mode][:16]
     elif size in [16, 32, 64]:
         s1, s2 = mRDX[size], mRAX[size]
-        b = m2_expr.ExprCompose([(s2, 0, size),
-                                 (s1, size, size * 2)])
+        b = m2_expr.ExprCompose(s2, s1)
     else:
         raise ValueError('div arg not impl', a)
 
@@ -1460,8 +1438,7 @@ def idiv(ir, instr, a):
 
     # if 8 bit div, only ax is affected
     if size == 8:
-        e.append(m2_expr.ExprAff(b, m2_expr.ExprCompose([(c_d[:8], 0, 8),
-                                                         (c_r[:8], 8, 16)])))
+        e.append(m2_expr.ExprAff(b, m2_expr.ExprCompose(c_d[:8], c_r[:8])))
     else:
         e.append(m2_expr.ExprAff(s1, c_r[:size]))
         e.append(m2_expr.ExprAff(s2, c_d[:size]))
@@ -1607,8 +1584,8 @@ def stos(ir, instr, size):
 
     addr_o = mRDI[instr.mode][:s]
     addr = addr_o
-    addr_p = addr + m2_expr.ExprInt_from(addr, size / 8)
-    addr_m = addr - m2_expr.ExprInt_from(addr, size / 8)
+    addr_p = addr + m2_expr.ExprInt(size / 8, addr.size)
+    addr_m = addr - m2_expr.ExprInt(size / 8, addr.size)
     if ir.do_str_segm:
         mss = ES
         if instr.additional_info.g2.value:
@@ -1643,8 +1620,8 @@ def lods(ir, instr, size):
 
     addr_o = mRSI[instr.mode][:s]
     addr = addr_o
-    addr_p = addr + m2_expr.ExprInt_from(addr, size / 8)
-    addr_m = addr - m2_expr.ExprInt_from(addr, size / 8)
+    addr_p = addr + m2_expr.ExprInt(size / 8, addr.size)
+    addr_m = addr - m2_expr.ExprInt(size / 8, addr.size)
     if ir.do_str_segm:
         mss = DS
         if instr.additional_info.g2.value:
@@ -1698,14 +1675,14 @@ def movs(ir, instr, size):
                              m2_expr.ExprMem(src, size)))
 
     e0 = []
-    e0.append(m2_expr.ExprAff(a, a + m2_expr.ExprInt_from(a, size / 8)))
-    e0.append(m2_expr.ExprAff(b, b + m2_expr.ExprInt_from(b, size / 8)))
+    e0.append(m2_expr.ExprAff(a, a + m2_expr.ExprInt(size / 8, a.size)))
+    e0.append(m2_expr.ExprAff(b, b + m2_expr.ExprInt(size / 8, b.size)))
     e0.append(m2_expr.ExprAff(ir.IRDst, lbl_next))
     e0 = irbloc(lbl_df_0.name, [e0])
 
     e1 = []
-    e1.append(m2_expr.ExprAff(a, a - m2_expr.ExprInt_from(a, size / 8)))
-    e1.append(m2_expr.ExprAff(b, b - m2_expr.ExprInt_from(b, size / 8)))
+    e1.append(m2_expr.ExprAff(a, a - m2_expr.ExprInt(size / 8, a.size)))
+    e1.append(m2_expr.ExprAff(b, b - m2_expr.ExprInt(size / 8, b.size)))
     e1.append(m2_expr.ExprAff(ir.IRDst, lbl_next))
     e1 = irbloc(lbl_df_1.name, [e1])
 
@@ -1755,9 +1732,11 @@ def float_pop(avoid_flt=None, popcount=1):
         if avoid_flt != float_list[i]:
             e.append(m2_expr.ExprAff(float_list[i],
                                      float_list[i + popcount]))
+    fill_value = m2_expr.ExprOp("int_64_to_double",
+                                m2_expr.ExprInt(0, float_list[i].size))
     for i in xrange(8 - popcount, 8):
         e.append(m2_expr.ExprAff(float_list[i],
-                                 m2_expr.ExprInt_from(float_list[i], 0)))
+                                 fill_value))
     e.append(
         m2_expr.ExprAff(float_stack_ptr,
                         float_stack_ptr - m2_expr.ExprInt(popcount, 3)))
@@ -2188,14 +2167,10 @@ def fyl2x(ir, instr):
 def fnstenv(ir, instr, a):
     e = []
     # XXX TODO tag word, ...
-    status_word = m2_expr.ExprCompose([(m2_expr.ExprInt8(0), 0, 8),
-                                       (float_c0,           8, 9),
-                                       (float_c1,           9, 10),
-                                       (float_c2,           10, 11),
-                                       (float_stack_ptr,    11, 14),
-                                       (float_c3,           14, 15),
-                                       (m2_expr.ExprInt1(0), 15, 16),
-                                       ])
+    status_word = m2_expr.ExprCompose(m2_expr.ExprInt8(0),
+                                      float_c0, float_c1, float_c2,
+                                      float_stack_ptr, float_c3,
+                                      m2_expr.ExprInt1(0))
 
     s = instr.mode
     # The behaviour in 64bit is identical to 32 bit
@@ -2203,19 +2178,19 @@ def fnstenv(ir, instr, a):
     s = min(32, s)
     ad = m2_expr.ExprMem(a.arg, size=16)
     e.append(m2_expr.ExprAff(ad, float_control))
-    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt_from(a.arg, s / 8 * 1),
+    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt(s / 8 * 1, a.arg.size),
                          size=16)
     e.append(m2_expr.ExprAff(ad, status_word))
-    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt_from(a.arg, s / 8 * 3),
+    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt(s / 8 * 3, a.arg.size),
                          size=s)
     e.append(m2_expr.ExprAff(ad, float_eip[:s]))
-    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt_from(a.arg, s / 8 * 4),
+    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt(s / 8 * 4, a.arg.size),
                          size=16)
     e.append(m2_expr.ExprAff(ad, float_cs))
-    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt_from(a.arg, s / 8 * 5),
+    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt(s / 8 * 5, a.arg.size),
                          size=s)
     e.append(m2_expr.ExprAff(ad, float_address[:s]))
-    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt_from(a.arg, s / 8 * 6),
+    ad = m2_expr.ExprMem(a.arg + m2_expr.ExprInt(s / 8 * 6, a.arg.size),
                          size=16)
     e.append(m2_expr.ExprAff(ad, float_ds))
     return e, []
@@ -2493,15 +2468,15 @@ def fabs(ir, instr):
 def fnstsw(ir, instr, dst):
     args = [
         # Exceptions -> 0
-        (m2_expr.ExprInt8(0), 0, 8),
-        (float_c0,           8, 9),
-        (float_c1,           9, 10),
-        (float_c2,           10, 11),
-        (float_stack_ptr,    11, 14),
-        (float_c3,           14, 15),
+        m2_expr.ExprInt8(0),
+        float_c0,
+        float_c1,
+        float_c2,
+        float_stack_ptr,
+        float_c3,
         # B: FPU is not busy -> 0
-        (m2_expr.ExprInt1(0), 15, 16)]
-    e = [m2_expr.ExprAff(dst, m2_expr.ExprCompose(args))]
+        m2_expr.ExprInt1(0)]
+    e = [m2_expr.ExprAff(dst, m2_expr.ExprCompose(*args))]
     return e, []
 
 
@@ -2652,11 +2627,9 @@ def das(ir, instr):
 def aam(ir, instr, a):
     e = []
     tempAL = mRAX[instr.mode][0:8]
-    newEAX = m2_expr.ExprCompose([
-        (tempAL % a,           0,  8),
-                        (tempAL / a,           8,  16),
-                        (mRAX[instr.mode][16:], 16, mRAX[instr.mode].size),
-    ])
+    newEAX = m2_expr.ExprCompose(tempAL % a,
+                                 tempAL / a,
+                                 mRAX[instr.mode][16:])
     e += [m2_expr.ExprAff(mRAX[instr.mode], newEAX)]
     e += update_flag_arith(newEAX)
     e.append(m2_expr.ExprAff(af, m2_expr.ExprInt1(0)))
@@ -2667,12 +2640,9 @@ def aad(ir, instr, a):
     e = []
     tempAL = mRAX[instr.mode][0:8]
     tempAH = mRAX[instr.mode][8:16]
-    newEAX = m2_expr.ExprCompose([
-        ((tempAL + (tempAH * a)) & m2_expr.ExprInt8(0xFF), 0,  8),
-            (m2_expr.ExprInt8(0),                              8,  16),
-            (mRAX[instr.mode][16:],
-             16, mRAX[instr.mode].size),
-    ])
+    newEAX = m2_expr.ExprCompose((tempAL + (tempAH * a)) & m2_expr.ExprInt8(0xFF),
+                                 m2_expr.ExprInt8(0),
+                                 mRAX[instr.mode][16:])
     e += [m2_expr.ExprAff(mRAX[instr.mode], newEAX)]
     e += update_flag_arith(newEAX)
     e.append(m2_expr.ExprAff(af, m2_expr.ExprInt1(0)))
@@ -2695,8 +2665,13 @@ def _tpl_aaa(ir, instr, op):
     cond |= af & i1
 
     to_add = m2_expr.ExprInt(0x106, size=r_ax.size)
-    new_ax = m2_expr.ExprOp(op, r_ax, to_add) & m2_expr.ExprInt(0xff0f,
-                                                                size=r_ax.size)
+    if op == "-":
+        # Avoid ExprOp("-", A, B), should be ExprOp("+", A, ExprOp("-", B))
+        first_part = r_ax - to_add
+    else:
+        first_part = m2_expr.ExprOp(op, r_ax, to_add)
+    new_ax = first_part & m2_expr.ExprInt(0xff0f,
+                                          size=r_ax.size)
     # set AL
     e.append(m2_expr.ExprAff(r_ax, m2_expr.ExprCond(cond, new_ax, r_ax)))
     e.append(m2_expr.ExprAff(af, cond))
@@ -2730,12 +2705,12 @@ def bsr_bsf(ir, instr, a, b, op_name):
                                                     lbl_src_not_null,
                                                     lbl_src_null))]
     e_src_null = []
-    e_src_null.append(m2_expr.ExprAff(zf, m2_expr.ExprInt_from(zf, 1)))
+    e_src_null.append(m2_expr.ExprAff(zf, m2_expr.ExprInt(1, zf.size)))
     # XXX destination is undefined
     e_src_null.append(aff_dst)
 
     e_src_not_null = []
-    e_src_not_null.append(m2_expr.ExprAff(zf, m2_expr.ExprInt_from(zf, 0)))
+    e_src_not_null.append(m2_expr.ExprAff(zf, m2_expr.ExprInt(0, zf.size)))
     e_src_not_null.append(m2_expr.ExprAff(a, m2_expr.ExprOp(op_name, b)))
     e_src_not_null.append(aff_dst)
 
@@ -2773,13 +2748,13 @@ def sidt(ir, instr, a):
                              m2_expr.ExprInt32(0xe40007ff)))
     e.append(
         m2_expr.ExprAff(m2_expr.ExprMem(m2_expr.ExprOp("+", b,
-                                                       m2_expr.ExprInt_from(b, 4)), 16), m2_expr.ExprInt16(0x8245)))
+                                                       m2_expr.ExprInt(4, b.size)), 16), m2_expr.ExprInt16(0x8245)))
     return e, []
 
 
 def sldt(ir, instr, a):
-    # XXX TOOD
-    e = [m2_expr.ExprAff(exception_flags, m2_expr.ExprInt32(EXCEPT_PRIV_INSN))]
+    print "DEFAULT SLDT ADDRESS %s!!" % str(a)
+    e = [m2_expr.ExprAff(a, m2_expr.ExprInt(0, a.size))]
     return e, []
 
 
@@ -2850,7 +2825,7 @@ def cmovns(ir, instr, arg1, arg2):
 def icebp(ir, instr):
     e = []
     e.append(m2_expr.ExprAff(exception_flags,
-                             m2_expr.ExprInt32(EXCEPT_PRIV_INSN)))
+                             m2_expr.ExprInt32(EXCEPT_SOFT_BP)))
     return e, []
 # XXX
 
@@ -2869,6 +2844,13 @@ def l_int(ir, instr, a):
 
 
 def l_sysenter(ir, instr):
+    e = []
+    e.append(m2_expr.ExprAff(exception_flags,
+                             m2_expr.ExprInt32(EXCEPT_PRIV_INSN)))
+    return e, []
+
+
+def l_syscall(ir, instr):
     e = []
     e.append(m2_expr.ExprAff(exception_flags,
                              m2_expr.ExprInt32(EXCEPT_PRIV_INSN)))
@@ -2897,9 +2879,8 @@ def l_outs(ir, instr, size):
 
 def xlat(ir, instr):
     e = []
-    a = m2_expr.ExprCompose([(m2_expr.ExprInt(0, 24), 8, 32),
-                             (mRAX[instr.mode][0:8], 0, 8)])
-    b = m2_expr.ExprMem(m2_expr.ExprOp('+', mRBX[instr.mode], a), 8)
+    a = mRAX[instr.mode][0:8].zeroExtend(mRBX[instr.mode].size)
+    b = m2_expr.ExprMem(mRBX[instr.mode] + a, 8)
     e.append(m2_expr.ExprAff(mRAX[instr.mode][0:8], b))
     return e, []
 
@@ -2927,16 +2908,22 @@ def bittest_get(a, b):
         b_mask = {16: 4, 32: 5, 64: 6}
         b_decal = {16: 1, 32: 3, 64: 7}
         ptr = a.arg
+        segm = a.is_op_segm()
+        if segm:
+            ptr = ptr.args[1]
+
         off_bit = b.zeroExtend(
             a.size) & m2_expr.ExprInt((1 << b_mask[a.size]) - 1,
                                       a.size)
-        off_byte = ((b.zeroExtend(ptr.size) >> m2_expr.ExprInt_from(ptr, 3)) &
-                    m2_expr.ExprInt_from(ptr,
-                                         ((1 << a.size) - 1) ^ b_decal[a.size]))
+        off_byte = ((b.zeroExtend(ptr.size) >> m2_expr.ExprInt(3, ptr.size)) &
+                    m2_expr.ExprInt(((1 << a.size) - 1) ^ b_decal[a.size], ptr.size))
 
-        d = m2_expr.ExprMem(ptr + off_byte, a.size)
+        addr = ptr + off_byte
+        if segm:
+            addr = m2_expr.ExprOp("segm", a.arg.args[0], addr)
+        d = m2_expr.ExprMem(addr, a.size)
     else:
-        off_bit = m2_expr.ExprOp('&', b, m2_expr.ExprInt_from(a, a.size - 1))
+        off_bit = m2_expr.ExprOp('&', b, m2_expr.ExprInt(a.size - 1, a.size))
         d = a
     return d, off_bit
 
@@ -2955,7 +2942,7 @@ def btc(ir, instr, a, b):
     d, off_bit = bittest_get(a, b)
     e.append(m2_expr.ExprAff(cf, (d >> off_bit)[:1]))
 
-    m = m2_expr.ExprInt_from(a, 1) << off_bit
+    m = m2_expr.ExprInt(1, a.size) << off_bit
     e.append(m2_expr.ExprAff(d, d ^ m))
 
     return e, []
@@ -2965,7 +2952,7 @@ def bts(ir, instr, a, b):
     e = []
     d, off_bit = bittest_get(a, b)
     e.append(m2_expr.ExprAff(cf, (d >> off_bit)[:1]))
-    m = m2_expr.ExprInt_from(a, 1) << off_bit
+    m = m2_expr.ExprInt(1, a.size) << off_bit
     e.append(m2_expr.ExprAff(d, d | m))
 
     return e, []
@@ -2975,7 +2962,7 @@ def btr(ir, instr, a, b):
     e = []
     d, off_bit = bittest_get(a, b)
     e.append(m2_expr.ExprAff(cf, (d >> off_bit)[:1]))
-    m = ~(m2_expr.ExprInt_from(a, 1) << off_bit)
+    m = ~(m2_expr.ExprInt(1, a.size) << off_bit)
     e.append(m2_expr.ExprAff(d, d & m))
 
     return e, []
@@ -3018,7 +3005,7 @@ def cmpxchg8b(arg1):
 def lds(ir, instr, a, b):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprMem(b.arg, size=a.size)))
-    DS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt_from(b.arg, a.size / 8),
+    DS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt(a.size / 8, b.arg.size),
                                size=16)
     e.append(m2_expr.ExprAff(DS, DS_value))
     return e, []
@@ -3027,7 +3014,7 @@ def lds(ir, instr, a, b):
 def les(ir, instr, a, b):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprMem(b.arg, size=a.size)))
-    ES_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt_from(b.arg, a.size / 8),
+    ES_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt(a.size / 8, b.arg.size),
                                size=16)
     e.append(m2_expr.ExprAff(ES, ES_value))
     return e, []
@@ -3036,7 +3023,7 @@ def les(ir, instr, a, b):
 def lss(ir, instr, a, b):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprMem(b.arg, size=a.size)))
-    SS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt_from(b.arg, a.size / 8),
+    SS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt(a.size / 8, b.arg.size),
                                size=16)
     e.append(m2_expr.ExprAff(SS, SS_value))
     return e, []
@@ -3045,7 +3032,7 @@ def lss(ir, instr, a, b):
 def lfs(ir, instr, a, b):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprMem(b.arg, size=a.size)))
-    FS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt_from(b.arg, a.size / 8),
+    FS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt(a.size / 8, b.arg.size),
                                size=16)
     e.append(m2_expr.ExprAff(FS, FS_value))
     return e, []
@@ -3054,7 +3041,7 @@ def lfs(ir, instr, a, b):
 def lgs(ir, instr, a, b):
     e = []
     e.append(m2_expr.ExprAff(a, m2_expr.ExprMem(b.arg, size=a.size)))
-    GS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt_from(b.arg, a.size / 8),
+    GS_value = m2_expr.ExprMem(b.arg + m2_expr.ExprInt(a.size / 8, b.arg.size),
                                size=16)
     e.append(m2_expr.ExprAff(GS, GS_value))
     return e, []
@@ -3062,13 +3049,10 @@ def lgs(ir, instr, a, b):
 
 def lahf(ir, instr):
     e = []
-    args = []
-    regs = [cf, m2_expr.ExprInt1(1), pf, m2_expr.ExprInt1(0), af,
+    args = [cf, m2_expr.ExprInt1(1), pf, m2_expr.ExprInt1(0), af,
             m2_expr.ExprInt1(0), zf, nf]
-    for i in xrange(len(regs)):
-        args.append((regs[i], i, i + 1))
     e.append(
-        m2_expr.ExprAff(mRAX[instr.mode][8:16], m2_expr.ExprCompose(args)))
+        m2_expr.ExprAff(mRAX[instr.mode][8:16], m2_expr.ExprCompose(*args)))
     return e, []
 
 
@@ -3117,11 +3101,9 @@ def l_str(ir, instr, a):
 def movd(ir, instr, a, b):
     e = []
     if a in regs_mm_expr:
-        e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose([(b, 0, 32),
-                                                         (m2_expr.ExprInt32(0), 32, 64)])))
+        e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose(b, m2_expr.ExprInt32(0))))
     elif a in regs_xmm_expr:
-        e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose([(b, 0, 32),
-                                                         (m2_expr.ExprInt(0, 96), 32, 128)])))
+        e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose(b, m2_expr.ExprInt(0, 96))))
     else:
         e.append(m2_expr.ExprAff(a, b[:32]))
     return e, []
@@ -3168,7 +3150,7 @@ def rdmsr(ir, instr):
     e.append(
         m2_expr.ExprAff(mRAX[instr.mode][:32], m2_expr.ExprMem(msr_addr, 32)))
     e.append(m2_expr.ExprAff(mRDX[instr.mode][:32], m2_expr.ExprMem(
-        msr_addr + m2_expr.ExprInt_from(msr_addr, 4), 32)))
+        msr_addr + m2_expr.ExprInt(4, msr_addr.size), 32)))
     return e, []
 
 
@@ -3176,8 +3158,7 @@ def wrmsr(ir, instr):
     msr_addr = m2_expr.ExprId('MSR') + m2_expr.ExprInt32(
         8) * mRCX[instr.mode][:32]
     e = []
-    src = m2_expr.ExprCompose([(mRAX[instr.mode][:32], 0, 32),
-                               (mRDX[instr.mode][:32], 32, 64)])
+    src = m2_expr.ExprCompose(mRAX[instr.mode][:32], mRDX[instr.mode][:32])
     e.append(m2_expr.ExprAff(m2_expr.ExprMem(msr_addr, 64), src))
     return e, []
 
@@ -3205,17 +3186,14 @@ def vec_vertical_sem(op, elt_size, reg_size, a, b):
     assert(reg_size % elt_size == 0)
     n = reg_size / elt_size
     if op == '-':
-        ops = [(
+        ops = [
             (a[i * elt_size:(i + 1) * elt_size]
-             - b[i * elt_size:(i + 1) * elt_size]),
-               i * elt_size, (i + 1) * elt_size) for i in xrange(0, n)]
+             - b[i * elt_size:(i + 1) * elt_size]) for i in xrange(0, n)]
     else:
-        ops = [(m2_expr.ExprOp(op, a[i * elt_size:(i + 1) * elt_size],
-                               b[i * elt_size:(i + 1) * elt_size]),
-                i * elt_size,
-                (i + 1) * elt_size) for i in xrange(0, n)]
+        ops = [m2_expr.ExprOp(op, a[i * elt_size:(i + 1) * elt_size],
+                              b[i * elt_size:(i + 1) * elt_size]) for i in xrange(0, n)]
 
-    return m2_expr.ExprCompose(ops)
+    return m2_expr.ExprCompose(*ops)
 
 
 def float_vec_vertical_sem(op, elt_size, reg_size, a, b):
@@ -3225,24 +3203,22 @@ def float_vec_vertical_sem(op, elt_size, reg_size, a, b):
     x_to_int, int_to_x = {32: ('float_to_int_%d', 'int_%d_to_float'),
                           64: ('double_to_int_%d', 'int_%d_to_double')}[elt_size]
     if op == '-':
-        ops = [(m2_expr.ExprOp(x_to_int % elt_size,
-                               m2_expr.ExprOp(int_to_x % elt_size, a[i * elt_size:(i + 1) * elt_size]) -
-                               m2_expr.ExprOp(
-                                   int_to_x % elt_size, b[i * elt_size:(
-                                       i + 1) * elt_size])),
-                i * elt_size, (i + 1) * elt_size) for i in xrange(0, n)]
+        ops = [m2_expr.ExprOp(x_to_int % elt_size,
+                              m2_expr.ExprOp(int_to_x % elt_size, a[i * elt_size:(i + 1) * elt_size]) -
+                              m2_expr.ExprOp(
+                                  int_to_x % elt_size, b[i * elt_size:(
+                                      i + 1) * elt_size])) for i in xrange(0, n)]
     else:
-        ops = [(m2_expr.ExprOp(x_to_int % elt_size,
-                               m2_expr.ExprOp(op,
-                                              m2_expr.ExprOp(
-                                                  int_to_x % elt_size, a[i * elt_size:(
-                                                      i + 1) * elt_size]),
-                                              m2_expr.ExprOp(
-                                                  int_to_x % elt_size, b[i * elt_size:(
-                                                      i + 1) * elt_size]))),
-                i * elt_size, (i + 1) * elt_size) for i in xrange(0, n)]
+        ops = [m2_expr.ExprOp(x_to_int % elt_size,
+                              m2_expr.ExprOp(op,
+                                             m2_expr.ExprOp(
+                                                 int_to_x % elt_size, a[i * elt_size:(
+                                                     i + 1) * elt_size]),
+                                             m2_expr.ExprOp(
+                                                 int_to_x % elt_size, b[i * elt_size:(
+                                                     i + 1) * elt_size]))) for i in xrange(0, n)]
 
-    return m2_expr.ExprCompose(ops)
+    return m2_expr.ExprCompose(*ops)
 
 
 def __vec_vertical_instr_gen(op, elt_size, sem):
@@ -3547,8 +3523,7 @@ def movss(ir, instr, a, b):
         e.append(m2_expr.ExprAff(a, b[:32]))
     else:
         # Source Mem Destination XMM
-        e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose([(b, 0, 32),
-                                                         (m2_expr.ExprInt(0, 96), 32, 128)])))
+        e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose(b, m2_expr.ExprInt(0, 96))))
     return e, []
 
 
@@ -3606,20 +3581,25 @@ def ps_rl_ll(ir, instr, a, b, op, size):
     mask = {16: 0xF,
             32: 0x1F,
             64: 0x3F}[size]
-    test = count & m2_expr.ExprInt(((1 << a.size) - 1) ^ mask, a.size)
+    test = expr_simp(count & m2_expr.ExprInt(((1 << a.size) - 1) ^ mask, a.size))
     e = [m2_expr.ExprAff(ir.IRDst, m2_expr.ExprCond(test,
                                                     lbl_zero,
                                                     lbl_do))]
 
-    e_zero = [m2_expr.ExprAff(a, m2_expr.ExprInt(0, a.size)),
-              m2_expr.ExprAff(ir.IRDst, lbl_next)]
-
-    e_do = []
     slices = []
     for i in xrange(0, a.size, size):
-        slices.append((m2_expr.ExprOp(op, a[i:i + size], count[:size]),
-                       i, i + size))
-    e.append(m2_expr.ExprAff(a[0:a.size], m2_expr.ExprCompose(slices)))
+        slices.append(m2_expr.ExprOp(op, a[i:i + size], count[:size]))
+
+    if isinstance(test, m2_expr.ExprInt):
+        if int(test) == 0:
+            return [m2_expr.ExprAff(a[0:a.size], m2_expr.ExprCompose(*slices))], []
+        else:
+            return [m2_expr.ExprAff(a, m2_expr.ExprInt(0, a.size))], []
+
+    e_zero = [m2_expr.ExprAff(a, m2_expr.ExprInt(0, a.size)),
+              m2_expr.ExprAff(ir.IRDst, lbl_next)]
+    e_do = []
+    e.append(m2_expr.ExprAff(a[0:a.size], m2_expr.ExprCompose(*slices)))
     e_do.append(m2_expr.ExprAff(ir.IRDst, lbl_next))
     return e, [irbloc(lbl_do.name, [e_do]), irbloc(lbl_zero.name, [e_zero])]
 
@@ -3742,11 +3722,9 @@ def punpck(ir, instr, a, b, size, off):
     e = []
     slices = []
     for i in xrange(a.size / (2 * size)):
-        src1 = a[size * i + off: size * i + off + size]
-        src2 = b[size * i + off: size * i + off + size]
-        slices.append((src1, size * 2 * i, size * 2 * i + size))
-        slices.append((src2, size * (2 * i + 1), size * (2 * i + 1) + size))
-    e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose(slices)))
+        slices.append(a[size * i + off: size * i + off + size])
+        slices.append(b[size * i + off: size * i + off + size])
+    e.append(m2_expr.ExprAff(a, m2_expr.ExprCompose(*slices)))
     return e, []
 
 
@@ -3790,7 +3768,7 @@ def pinsr(ir, instr, a, b, c, size):
             32: 0x3,
             64: 0x1}[size]
 
-    sel = (int(c.arg) & mask) * size
+    sel = (int(c) & mask) * size
     e.append(m2_expr.ExprAff(a[sel:sel + size], b[:size]))
 
     return e, []
@@ -3820,7 +3798,7 @@ def pextr(ir, instr, a, b, c, size):
             32: 0x3,
             64: 0x1}[size]
 
-    sel = (int(c.arg) & mask) * size
+    sel = (int(c) & mask) * size
     e.append(m2_expr.ExprAff(a, b[sel:sel + size].zeroExtend(a.size)))
 
     return e, []
@@ -3844,36 +3822,28 @@ def pextrq(ir, instr, a, b, c):
 
 def unpckhps(ir, instr, a, b):
     e = []
-    src = m2_expr.ExprCompose([(a[64:96], 0, 32),
-                               (b[64:96], 32, 64),
-                               (a[96:128], 64, 96),
-                               (b[96:128], 96, 128)])
+    src = m2_expr.ExprCompose(a[64:96], b[64:96], a[96:128], b[96:128])
     e.append(m2_expr.ExprAff(a, src))
     return e, []
 
 
 def unpckhpd(ir, instr, a, b):
     e = []
-    src = m2_expr.ExprCompose([(a[64:128], 0, 64),
-                               (b[64:128], 64, 128)])
+    src = m2_expr.ExprCompose(a[64:128], b[64:128])
     e.append(m2_expr.ExprAff(a, src))
     return e, []
 
 
 def unpcklps(ir, instr, a, b):
     e = []
-    src = m2_expr.ExprCompose([(a[0:32], 0, 32),
-                               (b[0:32], 32, 64),
-                               (a[32:64], 64, 96),
-                               (b[32:64], 96, 128)])
+    src = m2_expr.ExprCompose(a[0:32], b[0:32], a[32:64], b[32:64])
     e.append(m2_expr.ExprAff(a, src))
     return e, []
 
 
 def unpcklpd(ir, instr, a, b):
     e = []
-    src = m2_expr.ExprCompose([(a[0:64], 0, 64),
-                               (b[0:64], 64, 128)])
+    src = m2_expr.ExprCompose(a[0:64], b[0:64])
     e.append(m2_expr.ExprAff(a, src))
     return e, []
 
@@ -3923,10 +3893,9 @@ def sqrt_gen(ir, instr, a, b, size):
     e = []
     out = []
     for i in b.size / size:
-        out.append((m2_expr.ExprOp('fsqrt' % size,
-                                   b[i * size: (i + 1) * size]),
-                    i * size, (i + 1) * size))
-    src = m2_expr.ExprCompose(out)
+        out.append(m2_expr.ExprOp('fsqrt' % size,
+                                  b[i * size: (i + 1) * size]))
+    src = m2_expr.ExprCompose(*out)
     e.append(m2_expr.ExprAff(a, src))
     return e, []
 
@@ -3959,8 +3928,8 @@ def pmovmskb(ir, instr, a, b):
     e = []
     out = []
     for i in xrange(b.size / 8):
-        out.append((b[8 * i + 7:8 * (i + 1)], i, i + 1))
-    src = m2_expr.ExprCompose(out)
+        out.append(b[8 * i + 7:8 * (i + 1)])
+    src = m2_expr.ExprCompose(*out)
     e.append(m2_expr.ExprAff(a, src.zeroExtend(a.size)))
     return e, []
 
@@ -4254,6 +4223,7 @@ mnemo_func = {'mov': mov,
 
               'out': l_out,
               "sysenter": l_sysenter,
+              "syscall": l_syscall,
               "cmpxchg": cmpxchg,
               "cmpxchg8b": cmpxchg8b,
               "lds": lds,
@@ -4505,7 +4475,7 @@ class ir_x86_16(ir):
             if e.dst == zf:
                 zf_val = e.src
 
-        cond_dec = m2_expr.ExprCond(c_reg - m2_expr.ExprInt_from(c_reg, 1),
+        cond_dec = m2_expr.ExprCond(c_reg - m2_expr.ExprInt(1, c_reg.size),
                                     m2_expr.ExprInt1(0), m2_expr.ExprInt1(1))
         # end condition
         if zf_val is None:
@@ -4528,8 +4498,8 @@ class ir_x86_16(ir):
                     ir[i] = m2_expr.ExprAff(e.dst, src)
         cond_bloc = []
         cond_bloc.append(m2_expr.ExprAff(c_reg,
-                                         c_reg - m2_expr.ExprInt_from(c_reg,
-                                                                      1)))
+                                         c_reg - m2_expr.ExprInt(1,
+                                                                 c_reg.size)))
         cond_bloc.append(m2_expr.ExprAff(self.IRDst, m2_expr.ExprCond(c_cond,
                                                                       lbl_skip,
                                                                       lbl_do)))
@@ -4565,7 +4535,8 @@ class ir_x86_16(ir):
                 dst = self.expr_fix_regs_for_mode(dst, mode)
                 src = self.expr_fix_regs_for_mode(src, mode)
                 assignblk[dst] = src
-        irbloc.dst = self.expr_fix_regs_for_mode(irbloc.dst, mode)
+        if irbloc.dst is not None:
+            irbloc.dst = self.expr_fix_regs_for_mode(irbloc.dst, mode)
 
 
 class ir_x86_32(ir_x86_16):

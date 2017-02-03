@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#! /usr/bin/env python2
 #-*- coding:utf-8 -*-
 
 import unittest
@@ -19,7 +19,7 @@ def M(addr):
 
 def compute(asm, inputstate={}, debug=False):
     sympool = dict(regs_init)
-    sympool.update({k: ExprInt_from(k, v) for k, v in inputstate.iteritems()})
+    sympool.update({k: ExprInt(v, k.size) for k, v in inputstate.iteritems()})
     interm = ir_arch()
     symexec = symbexec(interm, sympool)
     instr = mn.fromstring(asm, mode)
@@ -27,7 +27,7 @@ def compute(asm, inputstate={}, debug=False):
     instr = mn.dis(code, mode)
     instr.offset = inputstate.get(PC, 0)
     interm.add_instr(instr)
-    symexec.emul_ir_blocs(interm, instr.offset)
+    symexec.emul_ir_blocks(instr.offset)
     if debug:
         for k, v in symexec.symbols.items():
             if regs_init.get(k, None) != v:

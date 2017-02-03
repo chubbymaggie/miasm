@@ -424,10 +424,10 @@ How does it work?
 Miasm embeds its own disassembler, intermediate language and
 instruction semantic. It is written in Python.
 
-To emulate code, it uses LibTCC, LLVM, GCC or Python to JIT the intermediate
-representation. It can emulate shellcodes and all or parts of binaries. Python
-callbacks can be executed to interact with the execution, for instance to
-emulate library functions effects.
+To emulate code, it uses LibTCC, LLVM, GCC, Clang or Python to JIT the
+intermediate representation. It can emulate shellcodes and all or parts of
+binaries. Python callbacks can be executed to interact with the execution, for
+instance to emulate library functions effects.
 
 Documentation
 =============
@@ -453,7 +453,8 @@ Miasm uses:
 
 To enable code JIT, one of the following module is mandatory:
 * GCC
-* LLVM v3.2 with python-llvm, see below
+* Clang
+* LLVM with Numba llvmlite, see below
 * LibTCC [tinycc (ONLY version 0.9.26)](http://repo.or.cz/w/tinycc.git)
 
 'optional' Miasm can also use:
@@ -472,6 +473,7 @@ sudo python setup.py install
 
 To use the jitter, GCC, TCC or LLVM is recommended
 * GCC (any version)
+* Clang (any version)
 * LibTCC needs to be configured with the `--disable-static` option
   * remove `libtcc-dev` from the system to avoid conflicts
   * clone [TinyCC](http://repo.or.cz/tinycc.git): `git clone http://repo.or.cz/tinycc.git`
@@ -481,9 +483,9 @@ To use the jitter, GCC, TCC or LLVM is recommended
   * `sudo make install`
   * There may be an error on documentation generation
 * LLVM
-  * Debian (testing/unstable): install python-llvm
-  * Debian stable/Ubuntu/Kali/whatever: install from [llvmpy](http://www.llvmpy.org/)
-  * Windows: python-llvm is not supported :/
+  * Debian (testing/unstable): Not tested
+  * Debian stable/Ubuntu/Kali/whatever: `pip install llvmlite` or install from [llvmlite](https://github.com/numba/llvmlite)
+  * Windows: Not tested
 * Build and install Miasm:
 ```
 $ cd miasm_directory
@@ -523,7 +525,8 @@ Some options can be specified:
 
 They already use Miasm
 ======================
-* [Sibyl](https://github.com/cea-sec/Sibyl): A function divination tool
+* [Sibyl](https://github.com/cea-sec/Sibyl): A function divination too
+* [R2M2](https://github.com/guedou/r2m2): Use miasm2 as a radare2 plugin
 
 
 Misc

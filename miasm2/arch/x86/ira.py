@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 from miasm2.expression.expression import ExprAff, ExprOp, ExprId
@@ -32,38 +31,6 @@ class ir_a_x86_16(ir_x86_16, ira):
         for b in leaves:
             self.set_dead_regs(b)
 
-    def post_add_bloc(self, bloc, ir_blocs):
-        ir.post_add_bloc(self, bloc, ir_blocs)
-        if not bloc.lines:
-            return
-        l = bloc.lines[-1]
-        sub_call_dst = None
-        if not l.is_subcall():
-            return
-        sub_call_dst = l.args[0]
-        if expr_is_label(sub_call_dst):
-            sub_call_dst = sub_call_dst.name
-        for irb in ir_blocs:
-            l = irb.lines[-1]
-            sub_call_dst = None
-            if not l.is_subcall():
-                continue
-            sub_call_dst = l.args[0]
-            if expr_is_label(sub_call_dst):
-                sub_call_dst = sub_call_dst.name
-            lbl = bloc.get_next()
-            new_lbl = self.gen_label()
-            irs = self.call_effects(l.args[0])
-            irs.append(AssignBlock([ExprAff(self.IRDst,
-                                            ExprId(lbl, size=self.pc.size))]))
-
-            nbloc = irbloc(new_lbl, irs)
-            nbloc.lines = [l] * len(irs)
-            self.blocs[new_lbl] = nbloc
-            irb.dst = ExprId(new_lbl, size=self.pc.size)
-        return
-
-
 class ir_a_x86_32(ir_x86_32, ir_a_x86_16):
 
     def __init__(self, symbol_pool=None):
@@ -92,7 +59,7 @@ class ir_a_x86_64(ir_x86_64, ir_a_x86_16):
         ir_x86_64.__init__(self, symbol_pool)
         self.ret_reg = self.arch.regs.RAX
 
-    def call_effects(self, ad):
+    def call_effects(self, ad, instr):
         return [AssignBlock([ExprAff(self.ret_reg, ExprOp('call_func_ret', ad,
                                                           self.sp,
                                                           self.arch.regs.RCX,

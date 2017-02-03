@@ -1,11 +1,11 @@
 #include <Python.h>
-#include "../JitCore.h"
 #include "structmember.h"
 #include <stdint.h>
 #include <inttypes.h>
 #include "../queue.h"
 #include "../vm_mngr.h"
 #include "../vm_mngr_py.h"
+#include "../JitCore.h"
 #include "JitCore_arm.h"
 
 
@@ -117,15 +117,15 @@ PyObject * cpu_init_regs(JitCpu* self)
 
 void dump_gpregs(vm_cpu_t* vmcpu)
 {
-	printf("R0 %.16"PRIX32" R1 %.16"PRIX32" R2 %.16"PRIX32" R3 %.16"PRIX32"\n",
+	printf("R0  %.16"PRIX32" R1  %.16"PRIX32" R2  %.16"PRIX32" R3  %.16"PRIX32" ",
 	       vmcpu->R0, vmcpu->R1, vmcpu->R2, vmcpu->R3);
-	printf("R4 %.16"PRIX32" R5 %.16"PRIX32" R6 %.16"PRIX32" R7 %.16"PRIX32"\n",
+	printf("R4  %.16"PRIX32" R5  %.16"PRIX32" R6  %.16"PRIX32" R7  %.16"PRIX32"\n",
 	       vmcpu->R4, vmcpu->R5, vmcpu->R6, vmcpu->R7);
-	printf("R8 %.16"PRIX32" R9 %.16"PRIX32" R10 %.16"PRIX32" R11 %.16"PRIX32"\n",
+	printf("R8  %.16"PRIX32" R9  %.16"PRIX32" R10 %.16"PRIX32" R11 %.16"PRIX32" ",
 	       vmcpu->R8, vmcpu->R9, vmcpu->R10, vmcpu->R11);
-	printf("R12 %.16"PRIX32" SP %.16"PRIX32" LR %.16"PRIX32" PC %.16"PRIX32"\n",
+	printf("R12 %.16"PRIX32" SP  %.16"PRIX32" LR  %.16"PRIX32" PC  %.16"PRIX32" ",
 	       vmcpu->R12, vmcpu->SP, vmcpu->LR, vmcpu->PC);
-	printf("zf %.16"PRIX32" nf %.16"PRIX32" of %.16"PRIX32" cf %.16"PRIX32"\n",
+	printf("zf %"PRIX32" nf %"PRIX32" of %"PRIX32" cf %"PRIX32"\n",
 	       vmcpu->zf, vmcpu->nf, vmcpu->of, vmcpu->cf);
 }
 
@@ -201,6 +201,17 @@ void MEM_WRITE_64(JitCpu* jitcpu, uint64_t addr, uint64_t src)
 }
 
 
+uint32_t clz(uint32_t arg)
+{
+
+	int i;
+
+	for (i=0; i<32; i++) {
+		if (arg & (1 << (31-i)))
+			break;
+	}
+	return i;
+}
 
 
 
@@ -300,8 +311,6 @@ PyObject* get_gpreg_offset_all(void)
     PyObject *o;
 
     get_reg_off(exception_flags);
-    get_reg_off(exception_flags_new);
-
 
     get_reg_off(R0);
     get_reg_off(R1);
@@ -320,121 +329,11 @@ PyObject* get_gpreg_offset_all(void)
     get_reg_off(LR);
     get_reg_off(PC);
 
-    get_reg_off(R0_new);
-    get_reg_off(R1_new);
-    get_reg_off(R2_new);
-    get_reg_off(R3_new);
-    get_reg_off(R4_new);
-    get_reg_off(R5_new);
-    get_reg_off(R6_new);
-    get_reg_off(R7_new);
-    get_reg_off(R8_new);
-    get_reg_off(R9_new);
-    get_reg_off(R10_new);
-    get_reg_off(R11_new);
-    get_reg_off(R12_new);
-    get_reg_off(SP_new);
-    get_reg_off(LR_new);
-    get_reg_off(PC_new);
-
 	/* eflag */
     get_reg_off(zf);
     get_reg_off(nf);
     get_reg_off(of);
     get_reg_off(cf);
-
-    get_reg_off(zf_new);
-    get_reg_off(nf_new);
-    get_reg_off(of_new);
-    get_reg_off(cf_new);
-
-
-    get_reg_off(pfmem08_0);
-    get_reg_off(pfmem08_1);
-    get_reg_off(pfmem08_2);
-    get_reg_off(pfmem08_3);
-    get_reg_off(pfmem08_4);
-    get_reg_off(pfmem08_5);
-    get_reg_off(pfmem08_6);
-    get_reg_off(pfmem08_7);
-    get_reg_off(pfmem08_8);
-    get_reg_off(pfmem08_9);
-    get_reg_off(pfmem08_10);
-    get_reg_off(pfmem08_11);
-    get_reg_off(pfmem08_12);
-    get_reg_off(pfmem08_13);
-    get_reg_off(pfmem08_14);
-    get_reg_off(pfmem08_15);
-    get_reg_off(pfmem08_16);
-    get_reg_off(pfmem08_17);
-    get_reg_off(pfmem08_18);
-    get_reg_off(pfmem08_19);
-
-
-    get_reg_off(pfmem16_0);
-    get_reg_off(pfmem16_1);
-    get_reg_off(pfmem16_2);
-    get_reg_off(pfmem16_3);
-    get_reg_off(pfmem16_4);
-    get_reg_off(pfmem16_5);
-    get_reg_off(pfmem16_6);
-    get_reg_off(pfmem16_7);
-    get_reg_off(pfmem16_8);
-    get_reg_off(pfmem16_9);
-    get_reg_off(pfmem16_10);
-    get_reg_off(pfmem16_11);
-    get_reg_off(pfmem16_12);
-    get_reg_off(pfmem16_13);
-    get_reg_off(pfmem16_14);
-    get_reg_off(pfmem16_15);
-    get_reg_off(pfmem16_16);
-    get_reg_off(pfmem16_17);
-    get_reg_off(pfmem16_18);
-    get_reg_off(pfmem16_19);
-
-
-    get_reg_off(pfmem32_0);
-    get_reg_off(pfmem32_1);
-    get_reg_off(pfmem32_2);
-    get_reg_off(pfmem32_3);
-    get_reg_off(pfmem32_4);
-    get_reg_off(pfmem32_5);
-    get_reg_off(pfmem32_6);
-    get_reg_off(pfmem32_7);
-    get_reg_off(pfmem32_8);
-    get_reg_off(pfmem32_9);
-    get_reg_off(pfmem32_10);
-    get_reg_off(pfmem32_11);
-    get_reg_off(pfmem32_12);
-    get_reg_off(pfmem32_13);
-    get_reg_off(pfmem32_14);
-    get_reg_off(pfmem32_15);
-    get_reg_off(pfmem32_16);
-    get_reg_off(pfmem32_17);
-    get_reg_off(pfmem32_18);
-    get_reg_off(pfmem32_19);
-
-
-    get_reg_off(pfmem64_0);
-    get_reg_off(pfmem64_1);
-    get_reg_off(pfmem64_2);
-    get_reg_off(pfmem64_3);
-    get_reg_off(pfmem64_4);
-    get_reg_off(pfmem64_5);
-    get_reg_off(pfmem64_6);
-    get_reg_off(pfmem64_7);
-    get_reg_off(pfmem64_8);
-    get_reg_off(pfmem64_9);
-    get_reg_off(pfmem64_10);
-    get_reg_off(pfmem64_11);
-    get_reg_off(pfmem64_12);
-    get_reg_off(pfmem64_13);
-    get_reg_off(pfmem64_14);
-    get_reg_off(pfmem64_15);
-    get_reg_off(pfmem64_16);
-    get_reg_off(pfmem64_17);
-    get_reg_off(pfmem64_18);
-    get_reg_off(pfmem64_19);
 
     return dict;
 }

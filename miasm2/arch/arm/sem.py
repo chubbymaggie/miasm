@@ -5,6 +5,7 @@ from miasm2.arch.arm.regs import *
 
 
 # liris.cnrs.fr/~mmrissa/lib/exe/fetch.php?media=armv7-a-r-manual.pdf
+EXCEPT_SOFT_BP = (1 << 1)
 
 EXCEPT_PRIV_INSN = (1 << 17)
 
@@ -397,7 +398,7 @@ def neg(ir, instr, a, b):
     return e
 
 def negs(ir, instr, a, b):
-    e = subs(ir, instr, a, ExprInt_from(b, 0), b)
+    e = subs(ir, instr, a, ExprInt(0, b.size), b)
     return e
 
 def bic(ir, instr, a, b, c=None):
@@ -480,7 +481,7 @@ def umull(ir, instr, a, b, c, d):
 
 def umlal(ir, instr, a, b, c, d):
     e = []
-    r = c.zeroExtend(64) * d.zeroExtend(64) + ExprCompose([(a, 0, 32), (b, 32, 64)])
+    r = c.zeroExtend(64) * d.zeroExtend(64) + ExprCompose(a, b)
     e.append(ExprAff(a, r[0:32]))
     e.append(ExprAff(b, r[32:64]))
     # r15/IRDst not allowed as output
@@ -496,7 +497,7 @@ def smull(ir, instr, a, b, c, d):
 
 def smlal(ir, instr, a, b, c, d):
     e = []
-    r = c.signExtend(64) * d.signExtend(64) + ExprCompose([(a, 0, 32), (b, 32, 64)])
+    r = c.signExtend(64) * d.signExtend(64) + ExprCompose(a, b)
     e.append(ExprAff(a, r[0:32]))
     e.append(ExprAff(b, r[32:64]))
     # r15/IRDst not allowed as output
@@ -892,8 +893,8 @@ def sxth(ir, instr, a, b):
 
 def ubfx(ir, instr, a, b, c, d):
     e = []
-    c = int(c.arg)
-    d = int(d.arg)
+    c = int(c)
+    d = int(d)
     r = b[c:c+d].zeroExtend(32)
     e.append(ExprAff(a, r))
     dst = None
@@ -904,19 +905,19 @@ def ubfx(ir, instr, a, b, c, d):
 
 def bfc(ir, instr, a, b, c):
     e = []
-    start = int(b.arg)
-    stop = start + int(c.arg)
+    start = int(b)
+    stop = start + int(c)
     out = []
     last = 0
     if start:
-        out.append((a[:start], 0, start))
+        out.append(a[:start])
         last = start
     if stop - start:
-        out.append((ExprInt32(0)[last:stop], last, stop))
+        out.append(ExprInt32(0)[last:stop])
         last = stop
     if last < 32:
-        out.append((a[last:], last, 32))
-    r = ExprCompose(out)
+        out.append(a[last:])
+    r = ExprCompose(*out)
     e.append(ExprAff(a, r))
     dst = None
     if PC in a.get_r():
@@ -926,10 +927,7 @@ def bfc(ir, instr, a, b, c):
 
 def rev(ir, instr, a, b):
     e = []
-    c = ExprCompose([(b[:8],      24, 32),
-                     (b[8:16],    16, 24),
-                     (b[16:24],   8, 16),
-                     (b[24:32],   0, 8)])
+    c = ExprCompose(b[24:32], b[16:24], b[8:16], b[:8])
     e.append(ExprAff(a, c))
     return e
 
@@ -937,6 +935,35 @@ def pld(ir, instr, a):
     return []
 
 
+def clz(ir, instr, a, b):
+    e = []
+    e.append(ExprAff(a, ExprOp('clz', b)))
+    return e
+
+def uxtab(ir, instr, a, b, c):
+    e = []
+    e.append(ExprAff(a, b + (c & ExprInt32(0xff))))
+    return e
+
+
+def bkpt(ir, instr, a):
+    e = []
+    e.append(ExprAff(exception_flags, ExprInt32(EXCEPT_SOFT_BP)))
+    e.append(ExprAff(bp_num, a))
+    return e
+
+def _extract_s16(arg, part):
+    if part == 'B': # bottom 16 bits
+        return arg[0:16]
+    elif part == 'T': # top 16 bits
+        return arg[16:32]
+
+def smul(ir, instr, a, b, c):
+    return [ExprAff(a, _extract_s16(b, instr.name[4]).signExtend(32) * _extract_s16(c, instr.name[5]).signExtend(32))]
+
+def smulw(ir, instr, a, b, c):
+    prod = b.signExtend(48) * _extract_s16(c, instr.name[5]).signExtend(48)
+    return [ExprAff(a, prod[16:48])] # signed most significant 32 bits of the 48-bit result
 
 COND_EQ = 0
 COND_NE = 1
@@ -1080,6 +1107,15 @@ mnemo_condm0 = {'add': add,
                 'ubfx': ubfx,
                 'bfc': bfc,
                 'rev': rev,
+                'clz': clz,
+                'uxtab': uxtab,
+                'bkpt': bkpt,
+                'smulbb': smul,
+                'smulbt': smul,
+                'smultb': smul,
+                'smultt': smul,
+                'smulwt': smulw,
+                'smulwb': smulw,
                 }
 
 mnemo_condm1 = {'adds': add,
@@ -1203,8 +1239,7 @@ class ir_arml(ir):
         # ir = get_mnemo_expr(self, self.name.lower(), *args)
         if len(args) and isinstance(args[-1], ExprOp):
             if args[-1].op == 'rrx':
-                args[-1] = ExprCompose(
-                    [(args[-1].args[0][1:], 0, 31), (cf, 31, 32)])
+                args[-1] = ExprCompose(args[-1].args[0][1:], cf)
             elif (args[-1].op in ['<<', '>>', '<<a', 'a>>', '<<<', '>>>'] and
                   isinstance(args[-1].args[-1], ExprId)):
                 args[-1] = ExprOp(args[-1].op,

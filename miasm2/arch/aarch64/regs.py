@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 from miasm2.expression.expression import *
@@ -89,9 +88,9 @@ all_regs_ids = [
 
     exception_flags,
     PC,
-    WZR, WZR,
+    WZR,
     zf, nf, of, cf,
-    XZR, WZR,
+    XZR
 
 ]
 

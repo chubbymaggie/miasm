@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 #
@@ -46,7 +45,6 @@ class AssignBlock(dict):
         * if dst is an ExprSlice, expand it to affect the full Expression
         * if dst already known, sources are merged
         """
-
         if dst.size != src.size:
             raise RuntimeError(
                 "sanitycheck: args must have same size! %s" %
@@ -59,7 +57,8 @@ class AssignBlock(dict):
                     for r in dst.slice_rest()]
             all_a = [(src, dst.start, dst.stop)] + rest
             all_a.sort(key=lambda x: x[1])
-            new_src = m2_expr.ExprCompose(all_a)
+            args = [expr for (expr, _, _) in all_a]
+            new_src = m2_expr.ExprCompose(*args)
         else:
             new_dst, new_src = dst, src
 
@@ -95,7 +94,12 @@ class AssignBlock(dict):
                          for interval in missing_i)
 
             # Build the merging expression
-            new_src = m2_expr.ExprCompose(e_colision.union(remaining))
+            args = list(e_colision.union(remaining))
+            args.sort(key=lambda x:x[1])
+            starts = [start for (_, start, _) in args]
+            assert len(set(starts)) == len(starts)
+            args = [expr for (expr, _, _) in args]
+            new_src = m2_expr.ExprCompose(*args)
 
         super(AssignBlock, self).__setitem__(new_dst, new_src)
 
@@ -103,17 +107,16 @@ class AssignBlock(dict):
     def get_modified_slice(dst, src):
         """Return an Expr list of extra expressions needed during the
         object instanciation"""
-
         if not isinstance(src, m2_expr.ExprCompose):
             raise ValueError("Get mod slice not on expraff slice", str(self))
         modified_s = []
-        for arg in src.args:
-            if (not isinstance(arg[0], m2_expr.ExprSlice) or
-                    arg[0].arg != dst or
-                    arg[1] != arg[0].start or
-                    arg[2] != arg[0].stop):
+        for index, arg in src.iter_args():
+            if not (isinstance(arg, m2_expr.ExprSlice) and
+                    arg.arg == dst and
+                    index == arg.start and
+                    index+arg.size == arg.stop):
                 # If x is not the initial expression
-                modified_s.append(arg)
+                modified_s.append((arg, index, index+arg.size))
         return modified_s
 
     def get_w(self):
@@ -129,7 +132,7 @@ class AssignBlock(dict):
         out = {}
         for dst, src in self.iteritems():
             src_read = src.get_r(mem_read=mem_read, cst_read=cst_read)
-            if isinstance(dst, m2_expr.ExprMem):
+            if isinstance(dst, m2_expr.ExprMem) and mem_read:
                 # Read on destination happens only with ExprMem
                 src_read.update(dst.arg.get_r(mem_read=mem_read,
                                               cst_read=cst_read))
@@ -326,7 +329,7 @@ class ir(object):
                 isinstance(ad.name, asm_label)):
             ad = ad.name
         if isinstance(ad, m2_expr.ExprInt):
-            ad = int(ad.arg)
+            ad = int(ad)
         if type(ad) in [int, long]:
             ad = self.symbol_pool.getby_offset_create(ad)
         elif isinstance(ad, asm_label):
@@ -355,33 +358,79 @@ class ir(object):
 
     def gen_pc_update(self, c, l):
         c.irs.append(AssignBlock([m2_expr.ExprAff(self.pc,
-                                                  m2_expr.ExprInt_from(self.pc,
-                                                                       l.offset))]))
+                                                  m2_expr.ExprInt(l.offset,
+                                                                  self.pc.size)
+                                                  )]))
         c.lines.append(l)
 
-    def add_bloc(self, bloc, gen_pc_updt=False):
-        c = None
-        ir_blocs_all = []
-        for l in bloc.lines:
-            if c is None:
-                label = self.get_instr_label(l)
-                c = irbloc(label, [], [])
-                ir_blocs_all.append(c)
-            assignblk, ir_blocs_extra = self.instr2ir(l)
+    def pre_add_instr(self, block, instr, irb_cur, ir_blocks_all, gen_pc_updt):
+        """Function called before adding an instruction from the the native @block to
+        the current irbloc.
 
-            if gen_pc_updt is not False:
-                self.gen_pc_update(c, l)
+        Returns None if the addition needs an irblock split, @irb_cur in other
+        cases.
 
-            c.irs.append(assignblk)
-            c.lines.append(l)
+        @block: native block source
+        @instr: native instruction
+        @irb_cur: current irbloc
+        @ir_blocks_all: list of additional effects
+        @gen_pc_updt: insert PC update effects between instructions
 
-            if ir_blocs_extra:
-                for b in ir_blocs_extra:
-                    b.lines = [l] * len(b.irs)
-                ir_blocs_all += ir_blocs_extra
-                c = None
-        self.post_add_bloc(bloc, ir_blocs_all)
-        return ir_blocs_all
+        """
+
+        return irb_cur
+
+    def add_instr_to_irblock(self, block, instr, irb_cur, ir_blocks_all, gen_pc_updt):
+        """
+        Add the IR effects of an instruction to the current irblock.
+
+        Returns None if the addition needs an irblock split, @irb_cur in other
+        cases.
+
+        @block: native block source
+        @instr: native instruction
+        @irb_cur: current irbloc
+        @ir_blocks_all: list of additional effects
+        @gen_pc_updt: insert PC update effects between instructions
+        """
+
+        irb_cur = self.pre_add_instr(block, instr, irb_cur, ir_blocks_all, gen_pc_updt)
+        if irb_cur is None:
+            return None
+
+        assignblk, ir_blocs_extra = self.instr2ir(instr)
+
+        if gen_pc_updt is not False:
+            self.gen_pc_update(irb_cur, instr)
+
+        irb_cur.irs.append(assignblk)
+        irb_cur.lines.append(instr)
+
+        if ir_blocs_extra:
+            for b in ir_blocs_extra:
+                b.lines = [instr] * len(b.irs)
+            ir_blocks_all += ir_blocs_extra
+            irb_cur = None
+        return irb_cur
+
+    def add_bloc(self, block, gen_pc_updt = False):
+        """
+        Add a native block to the current IR
+        @block: native assembly block
+        @gen_pc_updt: insert PC update effects between instructions
+        """
+
+        irb_cur = None
+        ir_blocks_all = []
+        for instr in block.lines:
+            if irb_cur is None:
+                label = self.get_instr_label(instr)
+                irb_cur = irbloc(label, [], [])
+                ir_blocks_all.append(irb_cur)
+            irb_cur = self.add_instr_to_irblock(block, instr, irb_cur,
+                                                ir_blocks_all, gen_pc_updt)
+        self.post_add_bloc(block, ir_blocks_all)
+        return ir_blocks_all
 
     def expr_fix_regs_for_mode(self, e, *args, **kwargs):
         return e
@@ -404,8 +453,13 @@ class ir(object):
         for b in ir_blocs:
             if b.dst is not None:
                 continue
-            dst = m2_expr.ExprId(self.get_next_label(bloc.lines[-1]),
-                                 self.pc.size)
+            next_lbl = bloc.get_next()
+            if next_lbl is None:
+                dst = m2_expr.ExprId(self.get_next_label(bloc.lines[-1]),
+                                     self.pc.size)
+            else:
+                dst = m2_expr.ExprId(next_lbl,
+                                     self.pc.size)
             b.irs.append(AssignBlock([m2_expr.ExprAff(self.IRDst, dst)]))
             b.lines.append(b.lines[-1])
 
@@ -514,7 +568,7 @@ class ir(object):
             for d in dst:
                 if isinstance(d, m2_expr.ExprInt):
                     d = m2_expr.ExprId(
-                        self.symbol_pool.getby_offset_create(int(d.arg)))
+                        self.symbol_pool.getby_offset_create(int(d)))
                 if expr_is_label(d):
                     self._graph.add_edge(lbl, d.name)
 

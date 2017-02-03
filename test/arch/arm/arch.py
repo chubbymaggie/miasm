@@ -151,8 +151,8 @@ reg_tests_arm = [
      "7420696e"),
     #("xxxxxxxx    UND        0x0, 0x0",
     # "100000e6"),
-    ("xxxxxxxx    BKPT       0x0, 0x0",
-     "700020e1"),
+    ('XXXXXXXX    BKPT       0x1234',
+     '742321e1'),
     ("c00d153c    LDRH       R2, [R4, 0xCA]",
      "ba2cd4e1"),
     ("c00d18a8    LDRH       R6, [R12]",
@@ -249,6 +249,12 @@ reg_tests_arm = [
      '00F0D1F5'),
     ('XXXXXXXX    PLD        [R1, 0x1C]',
      '1CF0D1F5'),
+
+    ('XXXXXXXX    UXTAB      R5, R2, R8',
+     '7850e2e6'),
+
+    ('XXXXXXXX    UXTAB      R5, R2, R8 ROR 0x8',
+     '7854e2e6'),
 
 
 ]

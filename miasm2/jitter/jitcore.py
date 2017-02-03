@@ -51,9 +51,8 @@ class JitCore(object):
         self.blocs_mem_interval = interval()
         self.disasm_cb = None
         self.split_dis = set()
-        self.addr_mod = interval()
-
-        self.options = {"jit_maxline": 50  # Maximum number of line jitted
+        self.options = {"jit_maxline": 50,  # Maximum number of line jitted
+                        "max_exec_per_call": 0 # 0 means no limit
                         }
 
         self.mdis = asmbloc.disasmEngine(ir_arch.arch, ir_arch.attrib, bs,
@@ -95,6 +94,11 @@ class JitCore(object):
         if cur_bloc.lines:
             cur_bloc.ad_min = cur_bloc.lines[0].offset
             cur_bloc.ad_max = cur_bloc.lines[-1].offset + cur_bloc.lines[-1].l
+        else:
+            # 1 byte block for unknown mnemonic
+            cur_bloc.ad_min = cur_bloc.label.offset
+            cur_bloc.ad_max = cur_bloc.label.offset+1
+
 
     def add_bloc_to_mem_interval(self, vm, bloc):
         "Update vm to include bloc addresses in its memory range"
@@ -142,15 +146,12 @@ class JitCore(object):
             cur_bloc = self.mdis.dis_bloc(addr)
         except IOError:
             # vm_exception_flag is set
-            cur_bloc = asmbloc.asm_bloc(label)
+            label = self.ir_arch.symbol_pool.getby_offset_create(addr)
+            cur_bloc = asmbloc.asm_block_bad(label)
 
         # Logging
         if self.log_newbloc:
             print cur_bloc
-
-        # Check for empty blocks
-        if not cur_bloc.lines:
-            raise ValueError("Cannot JIT a block without any assembly line")
 
         # Update label -> bloc
         self.lbl2bloc[cur_bloc.label] = cur_bloc
@@ -164,32 +165,22 @@ class JitCore(object):
         # Update jitcode mem range
         self.add_bloc_to_mem_interval(vm, cur_bloc)
 
-    def jit_call(self, label, cpu, _vmmngr, breakpoints):
-        """Call the function label with cpu and vmmngr states
-        @label: function's label
-        @cpu: JitCpu instance
-        @breakpoints: Dict instance of used breakpoints
-        """
-        return self.exec_wrapper(label, cpu, self.lbl2jitbloc.data, breakpoints)
-
-    def runbloc(self, cpu, vm, lbl, breakpoints):
+    def runbloc(self, cpu, lbl, breakpoints):
         """Run the bloc starting at lbl.
         @cpu: JitCpu instance
-        @vm: VmMngr instance
         @lbl: target label
         """
 
         if lbl is None:
-            lbl = cpu.get_gpreg()[self.ir_arch.pc.name]
+            lbl = getattr(cpu, self.ir_arch.pc.name)
 
         if not lbl in self.lbl2jitbloc:
             # Need to JiT the bloc
-            self.disbloc(lbl, vm)
+            self.disbloc(lbl, cpu.vmmngr)
 
         # Run the bloc and update cpu/vmmngr state
-        ret = self.jit_call(lbl, cpu, vm, breakpoints)
-
-        return ret
+        return self.exec_wrapper(lbl, cpu, self.lbl2jitbloc.data, breakpoints,
+                                 self.options["max_exec_per_call"])
 
     def blocs2memrange(self, blocs):
         """Return an interval instance standing for blocs addresses
@@ -259,15 +250,21 @@ class JitCore(object):
 
         return modified_blocs
 
+    def updt_automod_code_range(self, vm, mem_range):
+        """Remove jitted code in range @mem_range
+        @vm: VmMngr instance
+        @mem_range: list of start/stop addresses
+        """
+        for addr_start, addr_stop in mem_range:
+            self.del_bloc_in_range(addr_start, addr_stop)
+        self.__updt_jitcode_mem_range(vm)
+        vm.reset_memory_access()
+
     def updt_automod_code(self, vm):
-        """Remove code jitted in range self.addr_mod
+        """Remove jitted code updated by memory write
         @vm: VmMngr instance
         """
-        for addr_start, addr_stop in self.addr_mod:
-            self.del_bloc_in_range(addr_start, addr_stop + 1)
-        self.__updt_jitcode_mem_range(vm)
-        self.addr_mod = interval()
-
-    def automod_cb(self, addr=0, size=0):
-        self.addr_mod += interval([(addr, addr + size / 8 - 1)])
-        return None
+        mem_range = []
+        for addr_start, addr_stop in vm.get_memory_write():
+            mem_range.append((addr_start, addr_stop))
+        self.updt_automod_code_range(vm, mem_range)

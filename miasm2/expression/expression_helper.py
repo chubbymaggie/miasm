@@ -34,103 +34,47 @@ def parity(a):
     return cpt
 
 
-def merge_sliceto_slice(args):
-    sources = {}
-    non_slice = {}
-    sources_int = {}
-    for a in args:
-        if isinstance(a[0], m2_expr.ExprInt):
-            # sources_int[a.start] = a
-            # copy ExprInt because we will inplace modify arg just below
-            # /!\ TODO XXX never ever modify inplace args...
-            sources_int[a[1]] = (m2_expr.ExprInt(int(a[0].arg),
-                                                 a[2] - a[1]),
-                                 a[1],
-                                 a[2])
-        elif isinstance(a[0], m2_expr.ExprSlice):
-            if not a[0].arg in sources:
-                sources[a[0].arg] = []
-            sources[a[0].arg].append(a)
-        else:
-            non_slice[a[1]] = a
-    # find max stop to determine size
-    max_size = None
-    for a in args:
-        if max_size is None or max_size < a[2]:
-            max_size = a[2]
+def merge_sliceto_slice(expr):
+    """
+    Apply basic factorisation on ExprCompose sub components
+    @expr: ExprCompose
+    """
 
-    # first simplify all num slices
-    final_sources = []
-    sorted_s = []
-    for x in sources_int.values():
-        x = list(x)
-        # mask int
-        v = x[0].arg & ((1 << (x[2] - x[1])) - 1)
-        x[0] = m2_expr.ExprInt_from(x[0], v)
-        x = tuple(x)
-        sorted_s.append((x[1], x))
-    sorted_s.sort()
-    while sorted_s:
-        start, v = sorted_s.pop()
-        out = [m2_expr.ExprInt(v[0].arg), v[1], v[2]]
-        size = v[2] - v[1]
-        while sorted_s:
-            if sorted_s[-1][1][2] != start:
-                break
-            s_start, s_stop = sorted_s[-1][1][1], sorted_s[-1][1][2]
-            size += s_stop - s_start
-            a = m2_expr.mod_size2uint[size](
-                (int(out[0].arg) << (out[1] - s_start)) +
-                 int(sorted_s[-1][1][0].arg))
-            out[0] = m2_expr.ExprInt(a)
-            sorted_s.pop()
-            out[1] = s_start
-        out[0] = m2_expr.ExprInt(int(out[0].arg), size)
-        final_sources.append((start, out))
+    out_args = []
+    last_index = 0
+    for index, arg in expr.iter_args():
+        # Init
+        if len(out_args) == 0:
+            out_args.append(arg)
+            continue
 
-    final_sources_int = final_sources
-    # check if same sources have corresponding start/stop
-    # is slice AND is sliceto
-    simp_sources = []
-    for args in sources.values():
-        final_sources = []
-        sorted_s = []
-        for x in args:
-            sorted_s.append((x[1], x))
-        sorted_s.sort()
-        while sorted_s:
-            start, v = sorted_s.pop()
-            ee = v[0].arg[v[0].start:v[0].stop]
-            out = ee, v[1], v[2]
-            while sorted_s:
-                if sorted_s[-1][1][2] != start:
-                    break
-                if sorted_s[-1][1][0].stop != out[0].start:
-                    break
+        last_value = out_args[-1]
+        # Consecutive
 
-                start = sorted_s[-1][1][1]
-                # out[0].start = sorted_s[-1][1][0].start
-                o_e, _, o_stop = out
-                o1, o2 = sorted_s[-1][1][0].start, o_e.stop
-                o_e = o_e.arg[o1:o2]
-                out = o_e, start, o_stop
-                # update _size
-                # out[0]._size = out[0].stop-out[0].start
-                sorted_s.pop()
-            out = out[0], start, out[2]
+        if last_index + last_value.size == index:
+            # Merge consecutive integers
+            if (isinstance(arg, m2_expr.ExprInt) and
+                isinstance(last_value, m2_expr.ExprInt)):
+                new_size = last_value.size + arg.size
+                value = int(arg) << last_value.size
+                value |= int(last_value)
+                out_args[-1] = m2_expr.ExprInt(value, size=new_size)
+                continue
 
-            final_sources.append((start, out))
+            # Merge consecuvite slice
+            elif (isinstance(arg, m2_expr.ExprSlice) and
+                  isinstance(last_value, m2_expr.ExprSlice)):
+                value = arg.arg
+                if (last_value.arg == value and
+                    last_value.stop == arg.start):
+                    out_args[-1] = value[last_value.start:arg.stop]
+                    continue
 
-        simp_sources += final_sources
+        # Unmergeable
+        last_index = index
+        out_args.append(arg)
 
-    simp_sources += final_sources_int
-
-    for i, v in non_slice.items():
-        simp_sources.append((i, v))
-
-    simp_sources.sort()
-    simp_sources = [x[1] for x in simp_sources]
-    return simp_sources
+    return out_args
 
 
 op_propag_cst = ['+', '*', '^', '&', '|', '>>',
@@ -210,9 +154,6 @@ class Variables_Identifier(object):
     - original expression with variables translated
     """
 
-    # Attribute used to distinguish created variables from original ones
-    is_var_ident = "is_var_ident"
-
     def __init__(self, expr, var_prefix="v"):
         """Set the expression @expr to handle and launch variable identification
         process
@@ -287,13 +228,11 @@ class Variables_Identifier(object):
             for element_done in done:
                 todo.remove(element_done)
 
-    @classmethod
-    def is_var_identifier(cls, expr):
+    def is_var_identifier(self, expr):
         "Return True iff @expr is a variable identifier"
         if not isinstance(expr, m2_expr.ExprId):
             return False
-
-        return expr.is_var_ident
+        return expr in self._vars
 
     def find_variables_rec(self, expr):
         """Recursive method called by find_variable to expand @expr.
@@ -310,7 +249,6 @@ class Variables_Identifier(object):
                 identifier = m2_expr.ExprId("%s%s" % (self.var_prefix,
                                                       self.var_indice.next()),
                                             size = expr.size)
-                identifier.is_var_ident = True
                 self._vars[identifier] = expr
 
             # Recursion stop case
@@ -333,8 +271,8 @@ class Variables_Identifier(object):
             self.find_variables_rec(expr.arg)
 
         elif isinstance(expr, m2_expr.ExprCompose):
-            for a in expr.args:
-                self.find_variables_rec(list(a)[0])
+            for arg in expr.args:
+                self.find_variables_rec(arg)
 
         elif isinstance(expr, m2_expr.ExprSlice):
             self.find_variables_rec(expr.arg)
@@ -455,21 +393,19 @@ class ExprRandom(object):
         """
         # First layer
         upper_bound = random.randint(1, size)
-        args = [(cls._gen(size=upper_bound, depth=depth - 1), 0, upper_bound)]
+        args = [cls._gen(size=upper_bound, depth=depth - 1)]
 
         # Next layers
         while (upper_bound < size):
             if len(args) == (cls.compose_max_layer - 1):
                 # We reach the maximum size
-                upper_bound = size
+                new_upper_bound = size
             else:
-                upper_bound = random.randint(args[-1][-1] + 1, size)
+                new_upper_bound = random.randint(upper_bound + 1, size)
 
-            args.append((cls._gen(size=upper_bound - args[-1][-1]),
-                         args[-1][-1],
-                         upper_bound))
-
-        return m2_expr.ExprCompose(args)
+            args.append(cls._gen(size=new_upper_bound - upper_bound))
+            upper_bound = new_upper_bound
+        return m2_expr.ExprCompose(*args)
 
     @classmethod
     def memory(cls, size=32, depth=1):
@@ -654,22 +590,17 @@ def possible_values(expr):
     elif isinstance(expr, m2_expr.ExprCompose):
         # Generate each possibility for sub-argument, associated with the start
         # and stop bit
-        consvals_args = [map(lambda x: (x, arg[1], arg[2]),
-                             possible_values(arg[0]))
+        consvals_args = [map(lambda x: x, possible_values(arg))
                          for arg in expr.args]
         for consvals_possibility in itertools.product(*consvals_args):
             # Merge constraint of each sub-element
-            args_constraint = itertools.chain(*[consval[0].constraints
+            args_constraint = itertools.chain(*[consval.constraints
                                                 for consval in consvals_possibility])
             # Gen the corresponding constraints / ExprCompose
+            args = [consval.value for consval in consvals_possibility]
             consvals.add(
                 ConstrainedValue(frozenset(args_constraint),
-                                 m2_expr.ExprCompose(
-                                     [(consval[0].value,
-                                       consval[1],
-                                       consval[2])
-                                      for consval in consvals_possibility]
-                )))
+                                 m2_expr.ExprCompose(*args)))
     else:
         raise RuntimeError("Unsupported type for expr: %s" % type(expr))
 

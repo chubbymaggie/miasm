@@ -76,7 +76,38 @@ const uint8_t parity_table[256] = {
     0, CC_P, CC_P, 0, CC_P, 0, 0, CC_P,
 };
 
-//#define DEBUG_MIASM_AUTOMOD_CODE
+// #define DEBUG_MIASM_AUTOMOD_CODE
+
+void memory_access_list_init(struct memory_access_list * access)
+{
+	access->array = NULL;
+	access->allocated = 0;
+	access->num = 0;
+}
+
+void memory_access_list_reset(struct memory_access_list * access)
+{
+	if (access->array) {
+		free(access->array);
+		access->array = NULL;
+	}
+	access->allocated = 0;
+	access->num = 0;
+}
+
+void memory_access_list_add(struct memory_access_list * access, uint64_t start, uint64_t stop)
+{
+	if (access->num >= access->allocated) {
+		if (access->allocated == 0)
+			access->allocated = 1;
+		else
+			access->allocated *= 2;
+		access->array = realloc(access->array, access->allocated * sizeof(struct memory_access));
+	}
+	access->array[access->num].start = start;
+	access->array[access->num].stop = stop;
+	access->num += 1;
+}
 
 
 
@@ -393,91 +424,172 @@ void dump_code_bloc(vm_mngr_t* vm_mngr)
 
 }
 
-void check_write_code_bloc(vm_mngr_t* vm_mngr, uint64_t my_size, uint64_t addr)
+void add_range_to_list(struct memory_access_list * access, uint64_t addr1, uint64_t addr2)
 {
-	struct code_bloc_node * cbp;
+	if (access->num > 0) {
+		/* Check match on upper bound */
+		 if (access->array[access->num-1].stop == addr1) {
+			 access->array[access->num-1].stop = addr2;
+			 return;
+		 }
 
-	if (!(addr + my_size/8 <= vm_mngr->code_bloc_pool_ad_min ||
-	      addr >=vm_mngr->code_bloc_pool_ad_max)){
+		/* Check match on lower bound */
+		 if (access->array[0].start == addr2) {
+			 access->array[0].start = addr1;
+			 return;
+		 }
+	}
+
+	/* No merge, add to the list */
+	memory_access_list_add(access, addr1, addr2);
+}
+
+
+void add_mem_read(vm_mngr_t* vm_mngr, uint64_t addr, uint64_t size)
+{
+	add_range_to_list(&(vm_mngr->memory_r), addr, addr + size);
+}
+
+void add_mem_write(vm_mngr_t* vm_mngr, uint64_t addr, uint64_t size)
+{
+	add_range_to_list(&(vm_mngr->memory_w), addr, addr + size);
+}
+
+void check_invalid_code_blocs(vm_mngr_t* vm_mngr)
+{
+	int i;
+	struct code_bloc_node * cbp;
+	for (i=0;i<vm_mngr->memory_w.num; i++) {
+		if (vm_mngr->exception_flags & EXCEPT_CODE_AUTOMOD)
+			break;
+		if (vm_mngr->memory_w.array[i].stop <= vm_mngr->code_bloc_pool_ad_min ||
+		    vm_mngr->memory_w.array[i].start >=vm_mngr->code_bloc_pool_ad_max)
+			continue;
+
 		LIST_FOREACH(cbp, &vm_mngr->code_bloc_pool, next){
-			if ((cbp->ad_start < addr + my_size/8) &&
-			    (addr < cbp->ad_stop)){
+			if ((cbp->ad_start < vm_mngr->memory_w.array[i].stop) &&
+			    (vm_mngr->memory_w.array[i].start < cbp->ad_stop)){
 #ifdef DEBUG_MIASM_AUTOMOD_CODE
 				fprintf(stderr, "**********************************\n");
-				fprintf(stderr, "self modifying code %"PRIX64" %.8X\n",
-				       addr, my_size);
+				fprintf(stderr, "self modifying code %"PRIX64" %"PRIX64"\n",
+					vm_mngr->memory_w.array[i].start,
+					vm_mngr->memory_w.array[i].stop);
 				fprintf(stderr, "**********************************\n");
 #endif
 				vm_mngr->exception_flags |= EXCEPT_CODE_AUTOMOD;
-
 				break;
 			}
 		}
 	}
 }
 
-PyObject* addr2BlocObj(vm_mngr_t* vm_mngr, uint64_t addr)
+
+void check_memory_breakpoint(vm_mngr_t* vm_mngr)
 {
-	PyObject* pyaddr;
-	PyObject* b;
+	int i;
+	struct memory_breakpoint_info * memory_bp;
 
-	pyaddr = PyLong_FromUnsignedLongLong(addr);
-	b = PyDict_GetItem(vm_mngr->addr2obj, pyaddr);
-	if (b == NULL) {
-		Py_INCREF(Py_None);
-		return Py_None;
+	/* Check memory breakpoints */
+	LIST_FOREACH(memory_bp, &vm_mngr->memory_breakpoint_pool, next) {
+		if (vm_mngr->exception_flags & EXCEPT_BREAKPOINT_INTERN)
+			break;
+		if (memory_bp->access & BREAKPOINT_READ) {
+			for (i=0;i<vm_mngr->memory_r.num; i++) {
+				if ((memory_bp->ad < vm_mngr->memory_r.array[i].stop) &&
+				    (vm_mngr->memory_r.array[i].start < memory_bp->ad + memory_bp->size)) {
+					vm_mngr->exception_flags |= EXCEPT_BREAKPOINT_INTERN;
+					break;
+				}
+			}
+		}
+		if (memory_bp->access & BREAKPOINT_WRITE) {
+			for (i=0;i<vm_mngr->memory_w.num; i++) {
+				if ((memory_bp->ad < vm_mngr->memory_w.array[i].stop) &&
+				    (vm_mngr->memory_w.array[i].start < memory_bp->ad + memory_bp->size)) {
+					vm_mngr->exception_flags |= EXCEPT_BREAKPOINT_INTERN;
+					break;
+				}
+			}
+		}
 	}
-
-	Py_INCREF(b);
-	return b;
 }
 
 
+PyObject* get_memory_pylist(vm_mngr_t* vm_mngr, struct memory_access_list* memory_list)
+{
+	int i;
+	PyObject *pylist;
+	PyObject *range;
+	pylist = PyList_New(memory_list->num);
+	for (i=0;i<memory_list->num;i++) {
+		range = PyTuple_New(2);
+		PyTuple_SetItem(range, 0, PyLong_FromUnsignedLongLong((uint64_t)memory_list->array[i].start));
+		PyTuple_SetItem(range, 1, PyLong_FromUnsignedLongLong((uint64_t)memory_list->array[i].stop));
+		PyList_SetItem(pylist, i, range);
+	}
+	return pylist;
+
+}
+
+PyObject* get_memory_read(vm_mngr_t* vm_mngr)
+{
+	return get_memory_pylist(vm_mngr, &vm_mngr->memory_r);
+}
+
+PyObject* get_memory_write(vm_mngr_t* vm_mngr)
+{
+	return get_memory_pylist(vm_mngr, &vm_mngr->memory_w);
+}
+
 void vm_MEM_WRITE_08(vm_mngr_t* vm_mngr, uint64_t addr, unsigned char src)
 {
-	check_write_code_bloc(vm_mngr, 8, addr);
+	add_mem_write(vm_mngr, addr, 1);
 	memory_page_write(vm_mngr, 8, addr, src);
 }
 
 void vm_MEM_WRITE_16(vm_mngr_t* vm_mngr, uint64_t addr, unsigned short src)
 {
-	check_write_code_bloc(vm_mngr, 16, addr);
+	add_mem_write(vm_mngr, addr, 2);
 	memory_page_write(vm_mngr, 16, addr, src);
 }
 void vm_MEM_WRITE_32(vm_mngr_t* vm_mngr, uint64_t addr, unsigned int src)
 {
-	check_write_code_bloc(vm_mngr, 32, addr);
+	add_mem_write(vm_mngr, addr, 4);
 	memory_page_write(vm_mngr, 32, addr, src);
 }
 void vm_MEM_WRITE_64(vm_mngr_t* vm_mngr, uint64_t addr, uint64_t src)
 {
-	check_write_code_bloc(vm_mngr, 64, addr);
+	add_mem_write(vm_mngr, addr, 8);
 	memory_page_write(vm_mngr, 64, addr, src);
 }
 
 unsigned char vm_MEM_LOOKUP_08(vm_mngr_t* vm_mngr, uint64_t addr)
 {
-    unsigned char ret;
-    ret = memory_page_read(vm_mngr, 8, addr);
-    return ret;
+	unsigned char ret;
+	add_mem_read(vm_mngr, addr, 1);
+	ret = memory_page_read(vm_mngr, 8, addr);
+	return ret;
 }
 unsigned short vm_MEM_LOOKUP_16(vm_mngr_t* vm_mngr, uint64_t addr)
 {
-    unsigned short ret;
-    ret = memory_page_read(vm_mngr, 16, addr);
-    return ret;
+	unsigned short ret;
+	add_mem_read(vm_mngr, addr, 2);
+	ret = memory_page_read(vm_mngr, 16, addr);
+	return ret;
 }
 unsigned int vm_MEM_LOOKUP_32(vm_mngr_t* vm_mngr, uint64_t addr)
 {
-    unsigned int ret;
-    ret = memory_page_read(vm_mngr, 32, addr);
-    return ret;
+	unsigned int ret;
+	add_mem_read(vm_mngr, addr, 4);
+	ret = memory_page_read(vm_mngr, 32, addr);
+	return ret;
 }
 uint64_t vm_MEM_LOOKUP_64(vm_mngr_t* vm_mngr, uint64_t addr)
 {
-    uint64_t ret;
-    ret = memory_page_read(vm_mngr, 64, addr);
-    return ret;
+	uint64_t ret;
+	add_mem_read(vm_mngr, addr, 8);
+	ret = memory_page_read(vm_mngr, 64, addr);
+	return ret;
 }
 
 
@@ -517,8 +629,6 @@ int vm_write_mem(vm_mngr_t* vm_mngr, uint64_t addr, char *buffer, uint64_t size)
 {
        uint64_t len;
        struct memory_page_node * mpn;
-
-       check_write_code_bloc(vm_mngr, size * 8, addr);
 
        /* write is multiple page wide */
        while (size){
@@ -789,7 +899,7 @@ unsigned int rcr_rez_op(unsigned int size, unsigned int a, unsigned int b, unsig
     return tmp;
 }
 
-unsigned int x86_bsr(uint64_t src, unsigned int size)
+unsigned int x86_bsr(unsigned int size, uint64_t src)
 {
 	int i;
 
@@ -801,7 +911,7 @@ unsigned int x86_bsr(uint64_t src, unsigned int size)
 	exit(0);
 }
 
-unsigned int x86_bsf(uint64_t src, unsigned int size)
+unsigned int x86_bsf(unsigned int size, uint64_t src)
 {
 	int i;
 
@@ -1388,8 +1498,13 @@ void init_memory_page_pool(vm_mngr_t* vm_mngr)
 void init_code_bloc_pool(vm_mngr_t* vm_mngr)
 {
 	LIST_INIT(&vm_mngr->code_bloc_pool);
-	vm_mngr->code_bloc_pool_ad_min = 0xffffffff;
+	vm_mngr->code_bloc_pool_ad_min = 0xffffffffffffffffULL;
 	vm_mngr->code_bloc_pool_ad_max = 0;
+
+	memory_access_list_init(&(vm_mngr->memory_r));
+	memory_access_list_init(&(vm_mngr->memory_w));
+
+
 }
 
 void init_memory_breakpoint(vm_mngr_t* vm_mngr)
@@ -1423,10 +1538,15 @@ void reset_code_bloc_pool(vm_mngr_t* vm_mngr)
 		LIST_REMOVE(cbp, next);
 		free(cbp);
 	}
-	vm_mngr->code_bloc_pool_ad_min = 0xffffffff;
+	vm_mngr->code_bloc_pool_ad_min = 0xffffffffffffffffULL;
 	vm_mngr->code_bloc_pool_ad_max = 0;
 }
 
+void reset_memory_access(vm_mngr_t* vm_mngr)
+{
+	memory_access_list_reset(&(vm_mngr->memory_r));
+	memory_access_list_reset(&(vm_mngr->memory_w));
+}
 
 void reset_memory_breakpoint(vm_mngr_t* vm_mngr)
 {
@@ -1439,6 +1559,8 @@ void reset_memory_breakpoint(vm_mngr_t* vm_mngr)
 	}
 
 }
+
+
 
 /* We don't use dichotomy here for the insertion */
 int is_mpn_in_tab(vm_mngr_t* vm_mngr, struct memory_page_node* mpn_a)

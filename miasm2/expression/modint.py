@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 class moduint(object):
@@ -42,11 +41,15 @@ class moduint(object):
             return self.__class__(self.arg & y)
 
     def __div__(self, y):
+        # Python: 8 / -7 == -2 (C-like: -1)
+        # int(float) trick cannot be used, due to information loss
+        den = int(y)
+        num = int(self)
+        result_sign = 1 if (den * num) >= 0 else -1
+        cls = self.__class__
         if isinstance(y, moduint):
             cls = self.maxcast(y)
-            return cls(int(float(self.arg) / y.arg))
-        else:
-            return self.__class__(int(float(self.arg) / y))
+        return ((abs(num) / abs(den)) * result_sign)
 
     def __int__(self):
         return int(self.arg)
@@ -65,11 +68,11 @@ class moduint(object):
             return self.__class__(self.arg << y)
 
     def __mod__(self, y):
+        # See __div__ for implementation choice
+        cls = self.__class__
         if isinstance(y, moduint):
             cls = self.maxcast(y)
-            return cls(self.arg - (y.arg * int(float(self.arg)/y.arg)))
-        else:
-            return self.__class__(self.arg - (y * int(float(self.arg)/y)))
+        return cls(self.arg - (y * (self / y)))
 
     def __mul__(self, y):
         if isinstance(y, moduint):
@@ -198,25 +201,36 @@ mod_size2int = {}
 mod_uint2size = {}
 mod_int2size = {}
 
+def define_int(size):
+    """Build the 'modint' instance corresponding to size @size"""
+    global mod_size2int, mod_int2size
+
+    name = 'int%d' % size
+    cls = type(name, (modint,), {"size": size, "limit": 1 << size})
+    globals()[name] = cls
+    mod_size2int[size] = cls
+    mod_int2size[cls] = size
+    return cls
+
+def define_uint(size):
+    """Build the 'moduint' instance corresponding to size @size"""
+    global mod_size2uint, mod_uint2size
+
+    name = 'uint%d' % size
+    cls = type(name, (moduint,), {"size": size, "limit": 1 << size})
+    globals()[name] = cls
+    mod_size2uint[size] = cls
+    mod_uint2size[cls] = size
+    return cls
 
 def define_common_int():
     "Define common int: ExprInt1, ExprInt2, .."
-    global mod_size2int, mod_int2size, mod_size2uint, mod_uint2size
-
     common_int = xrange(1, 257)
 
     for i in common_int:
-        name = 'uint%d' % i
-        c = type(name, (moduint,), {"size": i, "limit": 1 << i})
-        globals()[name] = c
-        mod_size2uint[i] = c
-        mod_uint2size[c] = i
+        define_int(i)
 
     for i in common_int:
-        name = 'int%d' % i
-        c = type(name, (modint,), {"size": i, "limit": 1 << i})
-        globals()[name] = c
-        mod_size2int[i] = c
-        mod_int2size[c] = i
+        define_uint(i)
 
 define_common_int()

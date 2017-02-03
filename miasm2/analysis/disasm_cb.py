@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 from miasm2.expression.expression import ExprInt, ExprId, ExprMem, MatchExpr
@@ -55,11 +54,11 @@ def arm_guess_subcall(
         if lr_val.arg != l.offset + l.l:
             continue
         # print 'IS CALL!'
-        l = symbol_pool.getby_offset_create(int(lr_val.arg))
+        l = symbol_pool.getby_offset_create(int(lr_val))
         c = asm_constraint_next(l)
 
         to_add.add(c)
-        offsets_to_dis.add(int(lr_val.arg))
+        offsets_to_dis.add(int(lr_val))
 
     # if to_add:
     #    print 'R'*70
@@ -106,7 +105,7 @@ def arm_guess_jump_table(
         print res
         if not isinstance(res[jrb], ExprInt):
             raise NotImplementedError('not fully functional')
-        base_ad = int(res[jrb].arg)
+        base_ad = int(res[jrb])
         print base_ad
         addrs = set()
         i = -1

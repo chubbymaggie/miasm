@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 from miasm2.expression.expression import *
@@ -29,7 +28,7 @@ def reset_sr_res():
 
 
 def update_flag_zf(a):
-    return [ExprAff(zf, ExprCond(a, ExprInt_from(zf, 0), ExprInt_from(zf, 1)))]
+    return [ExprAff(zf, ExprCond(a, ExprInt(0, zf.size), ExprInt(1, zf.size)))]
 
 
 def update_flag_nf(a):
@@ -37,11 +36,11 @@ def update_flag_nf(a):
 
 
 def update_flag_pf(a):
-    return [ExprAff(pf, ExprOp('parity', a & ExprInt_from(a, 0xFF)))]
+    return [ExprAff(pf, ExprOp('parity', a & ExprInt(0xFF, a.size)))]
 
 
 def update_flag_cf_inv_zf(a):
-    return [ExprAff(cf, ExprCond(a, ExprInt_from(cf, 1), ExprInt_from(cf, 0)))]
+    return [ExprAff(cf, ExprCond(a, ExprInt(1, cf.size), ExprInt(0, cf.size)))]
 
 
 def update_flag_zn_r(a):
@@ -75,7 +74,7 @@ def mng_autoinc(a, b, size):
         return e, a, b
 
     a_r = a.args[0]
-    e.append(ExprAff(a_r, a_r + ExprInt_from(a_r, size / 8)))
+    e.append(ExprAff(a_r, a_r + ExprInt(size / 8, a_r.size)))
     a = ExprMem(a_r, size)
     if isinstance(b, ExprMem) and a_r in b.arg:
         b = ExprMem(b.arg + ExprInt16(size / 8), b.size)
@@ -250,8 +249,7 @@ def call(ir, instr, a):
 def swpb(ir, instr, a):
     e = []
     x, y = a[:8], a[8:16]
-    e.append(ExprAff(a, ExprCompose([(y, 0, 8),
-                                     (x, 8, 16)])))
+    e.append(ExprAff(a, ExprCompose(y, x)))
     return e, []
 
 
@@ -330,8 +328,7 @@ def jmp(ir, instr, a):
 
 def rrc_w(ir, instr, a):
     e = []
-    c = ExprCompose([(a[1:16], 0, 15),
-                   (cf, 15, 16)])
+    c = ExprCompose(a[1:16], cf)
     e.append(ExprAff(a, c))
     e.append(ExprAff(cf, a[:1]))
     # e += update_flag_zn_r(c)
@@ -347,8 +344,7 @@ def rrc_w(ir, instr, a):
 
 def rra_w(ir, instr, a):
     e = []
-    c = ExprCompose([(a[1:16], 0, 15),
-                   (a[15:16], 15, 16)])
+    c = ExprCompose(a[1:16], a[15:16])
     e.append(ExprAff(a, c))
     # TODO: error in disasm microcorruption?
     # e.append(ExprAff(cf, a[:1]))
@@ -406,18 +402,7 @@ mnemo_func = {
 }
 
 
-composed_sr = ExprCompose([
-    (cf,   0,  1),
-    (zf,   1,  2),
-    (nf,   2,  3),
-    (gie,  3,  4),
-    (cpuoff,  4,  5),
-    (osc,  5,  6),
-    (scg0, 6,  7),
-    (scg1, 7,  8),
-    (of, 8,  9),
-    (res, 9, 16),
-])
+composed_sr = ExprCompose(cf, zf, nf, gie, cpuoff, osc, scg0, scg1, of, res)
 
 
 def ComposeExprAff(dst, src):

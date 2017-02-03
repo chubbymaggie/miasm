@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 from miasm2.expression.expression import *
@@ -17,6 +16,10 @@ class ir_a_mips32l(ir_mips32l, ira):
     # for test XXX TODO
     def set_dead_regs(self, b):
         pass
+
+    def pre_add_instr(self, block, instr, irb_cur, ir_blocks_all, gen_pc_updt):
+        # Avoid adding side effects, already done in post_add_bloc
+        return irb_cur
 
     def post_add_bloc(self, bloc, ir_blocs):
         ir.post_add_bloc(self, bloc, ir_blocs)
@@ -41,7 +44,7 @@ class ir_a_mips32l(ir_mips32l, ira):
             # CALL
             lbl = bloc.get_next()
             new_lbl = self.gen_label()
-            irs = self.call_effects(pc_val)
+            irs = self.call_effects(pc_val, l)
             irs.append(AssignBlock([ExprAff(self.IRDst,
                                             ExprId(lbl, size=self.pc.size))]))
             nbloc = irbloc(new_lbl, irs)

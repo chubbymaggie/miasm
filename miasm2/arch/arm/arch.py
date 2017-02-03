@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 import logging
@@ -38,6 +37,9 @@ gpregs_sp = reg_info(regs_str[13:14], regs_expr[13:14])
 
 gpregs_nosppc = reg_info(regs_str[:13] + [str(reg_dum), regs_str[14]],
                          regs_expr[:13] + [reg_dum, regs_expr[14]])
+
+gpregs_nopc = reg_info(regs_str[:14],
+                       regs_expr[:14])
 
 
 # psr
@@ -106,8 +108,17 @@ def check_bounds(left_bound, right_bound, value):
     else:
         raise ValueError('shift operator immediate value out of bound')
 
+
+def check_values(values, value):
+    if value in values:
+        return ExprInt32(value)
+    else:
+        raise ValueError('shift operator immediate value out of bound')
+
 int_1_31 = str_int.copy().setParseAction(lambda v: check_bounds(1, 31, v[0]))
 int_1_32 = str_int.copy().setParseAction(lambda v: check_bounds(1, 32, v[0]))
+
+int_8_16_24 = str_int.copy().setParseAction(lambda v: check_values([8, 16, 24], v[0]))
 
 
 def reglistparse(s, l, t):
@@ -144,6 +155,9 @@ all_binaryop_1_31_shifts_t = literal_list(
 all_binaryop_1_32_shifts_t = literal_list(
     ['LSR', 'ASR']).setParseAction(op_shift2expr)
 all_unaryop_shifts_t = literal_list(['RRX']).setParseAction(op_shift2expr)
+
+ror_shifts_t = literal_list(['ROR']).setParseAction(op_shift2expr)
+
 
 allshifts_t_armt = literal_list(
     ['LSL', 'LSR', 'ASR', 'ROR', 'RRX']).setParseAction(op_shift2expr)
@@ -188,6 +202,12 @@ shift_off = (gpregs.parser + Optional(
     (all_binaryop_1_32_shifts_t + (gpregs.parser | int_1_32))
 )).setParseAction(shift2expr)
 shift_off |= base_expr
+
+
+rot2_expr = (gpregs.parser + Optional(
+    (ror_shifts_t + (int_8_16_24))
+)).setParseAction(shift2expr)
+
 
 
 def deref2expr_nooff(s, l, t):
@@ -418,7 +438,7 @@ class instruction_arm(instruction):
 
     def get_asm_offset(self, expr):
         # LDR XXX, [PC, offset] => PC is self.offset+8
-        return ExprInt_from(expr, self.offset+8)
+        return ExprInt(self.offset+8, expr.size)
 
 class instruction_armt(instruction_arm):
     __slots__ = []
@@ -490,7 +510,7 @@ class instruction_armt(instruction_arm):
     def get_asm_offset(self, expr):
         # ADR XXX, PC, imm => PC is 4 aligned + imm
         new_offset = ((self.offset+self.l)/4)*4
-        return ExprInt_from(expr, new_offset)
+        return ExprInt(new_offset, expr.size)
 
 
 class mn_arm(cls_mn):
@@ -815,7 +835,7 @@ class arm_offs(arm_imm):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = int(self.expr.arg)
+        v = int(self.expr)
         if (1 << (self.l - 1)) & v:
             v = -((0xffffffff ^ v) + 1)
         v = self.encodeval(v)
@@ -867,7 +887,7 @@ class arm_imm8_12(m_arg):
         if not isinstance(e, ExprInt):
             log.debug('should be int %r', e)
             return False
-        v = int(e.arg)
+        v = int(e)
         if v < 0 or v & (1 << 31):
             self.parent.updown.value = 0
             v = -v & 0xFFFFFFFF
@@ -891,11 +911,31 @@ class arm_imm_4_12(m_arg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = int(self.expr.arg)
+        v = int(self.expr)
         if v > 0xffff:
             return False
         self.parent.imm4.value = v >> 12
         self.value = v & 0xfff
+        return True
+
+
+class arm_imm_12_4(m_arg):
+    parser = base_expr
+
+    def decode(self, v):
+        v = v & self.lmask
+        imm =  (self.parent.imm.value << 4) | v
+        self.expr = ExprInt32(imm)
+        return True
+
+    def encode(self):
+        if not isinstance(self.expr, ExprInt):
+            return False
+        v = int(self.expr)
+        if v > 0xffff:
+            return False
+        self.parent.imm.value = (v >> 4) & 0xfff
+        self.value = v & 0xf
         return True
 
 
@@ -954,7 +994,7 @@ class arm_op2(m_arg):
         e = self.expr
         # pure imm
         if isinstance(e, ExprInt):
-            val = self.str_to_imm_rot_form(int(e.arg))
+            val = self.str_to_imm_rot_form(int(e))
             if val is None:
                 return False
             self.parent.immop.value = 1
@@ -983,7 +1023,7 @@ class arm_op2(m_arg):
             shift_type = 3
         elif isinstance(e.args[1], ExprInt):
             shift_kind = 0
-            amount = int(e.args[1].arg)
+            amount = int(e.args[1])
             # LSR/ASR of 32 => 0
             if amount == 32 and e.op in ['>>', 'a>>']:
                 amount = 0
@@ -1079,9 +1119,9 @@ class arm_op2imm(arm_imm8_12):
         # pure imm
         if isinstance(e.args[1], ExprInt):
             self.parent.immop.value = 0
-            val = self.str_to_imm_rot_form(int(e.args[1].arg))
+            val = self.str_to_imm_rot_form(int(e.args[1]))
             if val is None:
-                val = self.str_to_imm_rot_form(int(e.args[1].arg), True)
+                val = self.str_to_imm_rot_form(int(e.args[1]), True)
                 if val is None:
                     log.debug('cannot encode inm')
                     return False
@@ -1106,7 +1146,7 @@ class arm_op2imm(arm_imm8_12):
         shift_type = allshifts.index(e.op)
         if isinstance(e.args[1], ExprInt):
             shift_kind = 0
-            amount = int(e.args[1].arg)
+            amount = int(e.args[1])
         else:
             shift_kind = 1
             amount = gpregs.expr.index(e.args[1]) << 1
@@ -1300,6 +1340,9 @@ imm4_noarg = bs(l=4, fname="imm4")
 
 imm_4_12 = bs(l=12, cls=(arm_imm_4_12,))
 
+imm12_noarg = bs(l=12, fname="imm")
+imm_12_4 = bs(l=4, cls=(arm_imm_12_4,))
+
 lowb = bs(l=1, fname='lowb')
 offs_blx = bs(l=24, cls=(arm_offs_blx,), fname="offs")
 
@@ -1362,7 +1405,7 @@ class arm_immed(m_arg):
             return True
         e = e.args[1]
         if isinstance(e, ExprInt):
-            v = int(e.arg)
+            v = int(e)
             if v < 0 or v & (1 << 31):
                 self.parent.updown.value = 0
                 v = (-v) & 0xFFFFFFFF
@@ -1443,7 +1486,7 @@ class arm_mem_rn_imm(m_arg):
             self.value = gpregs.expr.index(reg)
             if not isinstance(imm, ExprInt):
                 return False
-            value = int(imm.arg)
+            value = int(imm)
             if value & 0x80000000:
                 value = -value
                 self.parent.add_imm.value = 0
@@ -1559,7 +1602,7 @@ armop("cdata", [bs('110'), ppi, updown, tl, wback_no_t, bs_ctransfer_name,
                 rn_noarg, crd, cpnum, imm8_12], [cpnum, crd, imm8_12])
 armop("mr", [bs('1110'), cpopc, bs_mr_name, crn, rd, cpnum, cp, bs('1'), crm],
       [cpnum, cpopc, rd, crn, crm, cp])
-armop("bkpt", [bs('00010010'), imm12, bs('0111'), imm4])
+armop("bkpt", [bs('00010010'), imm12_noarg, bs('0111'), imm_12_4])
 armop("bx", [bs('000100101111111111110001'), rn])
 armop("mov", [bs('00110000'), imm4_noarg, rd, imm_4_12], [rd, imm_4_12])
 armop("movt", [bs('00110100'), imm4_noarg, rd, imm_4_12], [rd, imm_4_12])
@@ -1590,17 +1633,59 @@ class arm_widthm1(arm_imm, m_arg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = int(self.expr.arg) +  -1
+        v = int(self.expr) +  -1
         self.value = v
         return True
 
 
+class arm_rm_rot2(m_arg):
+    parser = rot2_expr
+    def decode(self, v):
+        expr = gpregs.expr[v]
+        shift_value = self.parent.rot2.value
+        if shift_value:
+            expr = ExprOp(allshifts[3], expr, ExprInt32(shift_value * 8))
+        self.expr = expr
+        return True
+    def encode(self):
+        if self.expr in gpregs.expr:
+            self.value = gpregs.expr.index(self.expr)
+            self.parent.rot2.value = 0
+        elif (isinstance(self.expr, ExprOp) and
+              self.expr.op == allshifts[3]):
+            reg, value = self.expr.args
+            if reg not in gpregs.expr:
+                return False
+            self.value = gpregs.expr.index(reg)
+            if not isinstance(value, ExprInt):
+                return False
+            value = int(value)
+            if not value in [8, 16, 24]:
+                return False
+            self.parent.rot2.value = value / 8
+        return True
+
+class arm_gpreg_nopc(arm_reg):
+    reg_info = gpregs_nopc
+    parser = reg_info.parser
+
+
+rm_rot2 = bs(l=4, cls=(arm_rm_rot2,), fname="rm")
+rot2 = bs(l=2, fname="rot2")
+
 widthm1 = bs(l=5, cls=(arm_widthm1, m_arg))
 lsb = bs(l=5, cls=(arm_imm, m_arg))
+
+rn_nopc = bs(l=4, cls=(arm_gpreg_nopc,), fname="rn")
 
 armop("ubfx", [bs('0111111'), widthm1, rd, lsb, bs('101'), rn], [rd, rn, lsb, widthm1])
 
 armop("bfc", [bs('0111110'), widthm1, rd, lsb, bs('001'), bs('1111')], [rd, lsb, widthm1])
+
+armop("uxtab", [bs('01101110'), rn_nopc, rd, rot2, bs('000111'), rm_rot2], [rd, rn_nopc, rm_rot2])
+
+
+
 #
 # thumnb #######################
 #
@@ -1653,7 +1738,7 @@ class arm_offreg(m_arg):
         if e.args[0] != self.off_reg:
             log.debug('cannot encode reg %r', e.args[0])
             return False
-        v = int(e.args[1].arg)
+        v = int(e.args[1])
         v = self.encodeval(v)
         self.value = v
         return True
@@ -1687,7 +1772,7 @@ class arm_offpc(arm_offreg):
         if e.args[0] != self.off_reg:
             log.debug('cannot encode reg %r', e.args[0])
             return False
-        v = int(e.args[1].arg)
+        v = int(e.args[1])
         v >>= 2
         self.value = v
         return True
@@ -1779,7 +1864,7 @@ class arm_offbw(imm_noarg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = int(self.expr.arg)
+        v = int(self.expr)
         if self.parent.trb.value == 0:
             if v & 3:
                 log.debug('off must be aligned %r', v)
@@ -1800,7 +1885,7 @@ class arm_offh(imm_noarg):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = int(self.expr.arg)
+        v = int(self.expr)
         if v & 1:
             log.debug('off must be aligned %r', v)
             return False
@@ -2080,6 +2165,7 @@ class arm_gpreg_nosppc(arm_reg):
     reg_info = gpregs_nosppc
 
 
+
 class armt_gpreg_rm_shift_off(arm_reg):
     parser = armt_gpreg_shift_off
 
@@ -2110,7 +2196,7 @@ class armt_gpreg_rm_shift_off(arm_reg):
         shift = e.op
         r = gpregs_nosppc.expr.index(e.args[0])
         self.value = r
-        i = int(e.args[1].arg)
+        i = int(e.args[1])
         if shift == 'rrx':
             if i != 1:
                 log.debug('rrx shift must be 1')
@@ -2161,7 +2247,7 @@ class armt2_imm12(arm_imm):
         return True
 
     def encode(self):
-        v = int(self.expr.arg)
+        v = int(self.expr)
         value = None
         # simple encoding
         if 0 <= v < 0x100:

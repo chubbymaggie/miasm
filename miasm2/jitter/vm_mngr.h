@@ -73,7 +73,16 @@ struct memory_page_node {
 	char* name;
 };
 
+struct memory_access {
+	uint64_t start;
+	uint64_t stop;
+};
 
+struct memory_access_list {
+	struct memory_access *array;
+	uint64_t allocated;
+	uint64_t num;
+};
 
 typedef struct {
 	int sex;
@@ -83,13 +92,20 @@ typedef struct {
 	int memory_pages_number;
 	struct memory_page_node* memory_pages_array;
 
-	unsigned int *code_addr_tab;
-	unsigned int code_bloc_pool_ad_min;
-	unsigned int code_bloc_pool_ad_max;
+	uint64_t code_bloc_pool_ad_min;
+	uint64_t code_bloc_pool_ad_max;
 
 	uint64_t exception_flags;
 	uint64_t exception_flags_new;
 	PyObject *addr2obj;
+
+
+	struct memory_access_list memory_r;
+	struct memory_access_list memory_w;
+
+
+	int write_num;
+
 }vm_mngr_t;
 
 
@@ -177,8 +193,7 @@ int vm_write_mem(vm_mngr_t* vm_mngr, uint64_t addr, char *buffer, uint64_t size)
 #define CC_P 1
 
 extern const uint8_t parity_table[256];
-
-#define parity(a) (parity_table[(a) & 0xFF])
+#define parity(a) parity_table[(a) & 0xFF]
 
 unsigned int my_imul08(unsigned int a, unsigned int b);
 
@@ -260,6 +275,11 @@ unsigned int rcr_rez_op(unsigned int size, unsigned int a, unsigned int b, unsig
 	    }
 
 
+void memory_access_list_init(struct memory_access_list * access);
+void memory_access_list_reset(struct memory_access_list * access);
+void memory_access_list_add(struct memory_access_list * access, uint64_t start, uint64_t stop);
+
+
 void hexdump(char* m, unsigned int l);
 
 struct code_bloc_node * create_code_bloc_node(uint64_t ad_start, uint64_t ad_stop);
@@ -281,7 +301,13 @@ void remove_memory_breakpoint(vm_mngr_t* vm_mngr, uint64_t ad, unsigned int acce
 
 void add_memory_page(vm_mngr_t* vm_mngr, struct memory_page_node* mpn);
 
-void check_write_code_bloc(vm_mngr_t* vm_mngr, uint64_t my_size, uint64_t addr);
+void add_mem_read(vm_mngr_t* vm_mngr, uint64_t addr, uint64_t size);
+void add_mem_write(vm_mngr_t* vm_mngr, uint64_t addr, uint64_t size);
+void check_invalid_code_blocs(vm_mngr_t* vm_mngr);
+void check_memory_breakpoint(vm_mngr_t* vm_mngr);
+void reset_memory_access(vm_mngr_t* vm_mngr);
+PyObject* get_memory_read(vm_mngr_t* vm_mngr);
+PyObject* get_memory_write(vm_mngr_t* vm_mngr);
 
 
 char* dump(vm_mngr_t* vm_mngr);

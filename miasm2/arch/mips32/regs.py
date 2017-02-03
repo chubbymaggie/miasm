@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 from miasm2.expression.expression import ExprId
@@ -10,6 +9,8 @@ gen_reg('PC_FETCH', globals())
 
 gen_reg('R_LO', globals())
 gen_reg('R_HI', globals())
+
+exception_flags = ExprId('exception_flags', 32)
 
 PC_init = ExprId("PC_init")
 PC_FETCH_init = ExprId("PC_FETCH_init")

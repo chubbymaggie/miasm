@@ -1,4 +1,3 @@
-#!/usr/bin/env python
 #-*- coding:utf-8 -*-
 
 import re
@@ -157,7 +156,7 @@ def parse_deref_int(s, l, t):
 def parse_deref_regint(s, l, t):
     t = t[0]
     r1 = reg2exprid(t[0][0])
-    i1 = ExprInt_from(r1, t[1].arg)
+    i1 = ExprInt(t[1].arg, r1.size)
     return r1 + i1
 
 
@@ -170,7 +169,7 @@ def parse_deref_regregint(s, l, t):
     t = t[0]
     r1 = reg2exprid(t[0][0])
     r2 = reg2exprid(t[1][0])
-    i1 = ExprInt_from(r1, t[2].arg)
+    i1 = ExprInt(t[2].arg, r1.size)
     return r1 + r2 + i1
 
 
@@ -178,7 +177,7 @@ def parse_deref_reg_intmreg(s, l, t):
     t = t[0]
     r1 = reg2exprid(t[0][0])
     r2 = reg2exprid(t[1][0])
-    i1 = ExprInt_from(r1, t[2].arg)
+    i1 = ExprInt(t[2].arg, r1.size)
     return r1 + (r2 * i1)
 
 
@@ -186,23 +185,23 @@ def parse_deref_reg_intmreg_int(s, l, t):
     t = t[0]
     r1 = reg2exprid(t[0][0])
     r2 = reg2exprid(t[1][0])
-    i1 = ExprInt_from(r1, t[2].arg)
-    i2 = ExprInt_from(r1, t[3].arg)
+    i1 = ExprInt(t[2].arg, r1.size)
+    i2 = ExprInt(t[3].arg, r1.size)
     return r1 + (r2 * i1) + i2
 
 
 def parse_deref_intmreg(s, l, t):
     t = t[0]
     r1 = reg2exprid(t[0][0])
-    i1 = ExprInt_from(r1, t[1].arg)
+    i1 = ExprInt(t[1].arg, r1.size)
     return r1 * i1
 
 
 def parse_deref_intmregint(s, l, t):
     t = t[0]
     r1 = reg2exprid(t[0][0])
-    i1 = ExprInt_from(r1, t[1].arg)
-    i2 = ExprInt_from(r1, t[1].arg)
+    i1 = ExprInt(t[1].arg, r1.size)
+    i2 = ExprInt(t[1].arg, r1.size)
     return (r1 * i1) + i2
 
 
@@ -554,7 +553,7 @@ class instruction_x86(instruction):
         if not isinstance(expr, ExprInt):
             log.warning('dynamic dst %r', expr)
             return
-        self.args[0] = ExprInt(int(expr.arg) - self.offset, self.mode)
+        self.args[0] = ExprInt(int(expr) - self.offset, self.mode)
 
     def get_info(self, c):
         self.additional_info.g1.value = c.g1.value
@@ -903,7 +902,7 @@ class mn_x86(cls_mn):
 
     def ir_pre_instruction(self):
         return [ExprAff(mRIP[self.mode],
-            ExprInt_from(mRIP[self.mode], self.offset + self.l))]
+            ExprInt(self.offset + self.l, mRIP[self.mode].size))]
 
     @classmethod
     def filter_asm_candidates(cls, instr, candidates):
@@ -1139,7 +1138,7 @@ class x86_s08to16(x86_imm):
     def expr2int(self, e):
         if not isinstance(e, ExprInt):
             return None
-        v = int(e.arg)
+        v = int(e)
         if v & ~((1 << self.l) - 1) != 0:
             return None
         return v
@@ -1158,7 +1157,7 @@ class x86_s08to16(x86_imm):
     def encode(self):
         if not isinstance(self.expr, ExprInt):
             return False
-        v = int(self.expr.arg)
+        v = int(self.expr)
         opmode = self.parent.v_opmode()
 
         out_size = self.out_size
@@ -1701,7 +1700,7 @@ def exprfindmod(e, o=None):
                 out = r
             return out
         elif e.op == "*":
-            mul = int(e.args[1].arg)
+            mul = int(e.args[1])
             a = e.args[0]
             i = size2gpregs[a.size].expr.index(a)
             o[i] = mul
@@ -1767,16 +1766,16 @@ def parse_mem(expr, parent, w8, sx=0, xmm=0, mm=0):
                                            (False, f_u08, ExprInt8),
                                            (False, f_u16, ExprInt16),
                                            (False, f_u32, ExprInt32)]:
-            value = cast_int(int(disp.arg))
+            value = cast_int(int(disp))
             if admode < value.size:
                 if signed:
-                    if int(disp.arg) != sign_ext(int(value.arg), admode, disp.size):
+                    if int(disp.arg) != sign_ext(int(value), admode, disp.size):
                         continue
                 else:
-                    if int(disp.arg) != int(value.arg):
+                    if int(disp.arg) != int(value):
                         continue
             else:
-                if int(disp.arg) != sign_ext(int(value.arg), value.size, admode):
+                if int(disp.arg) != sign_ext(int(value), value.size, admode):
                     continue
             x1 = dict(dct_expr)
             x1[f_imm] = (encoding, value)
@@ -1900,7 +1899,7 @@ def modrm2expr(modrm, parent, w8, sx=0, xmm=0, mm=0):
     if f_imm in modrm:
         if parent.disp.value is None:
             return None
-        o.append(ExprInt(int(parent.disp.expr.arg), admode))
+        o.append(ExprInt(int(parent.disp.expr), admode))
     expr = ExprOp('+', *o)
     if w8 == 0:
         opmode = 8
@@ -1972,7 +1971,7 @@ class x86_rm_arg(m_arg):
         moddd = False
         for v in v_cand:
             new_v_cand.append(v)
-            if f_imm in v and int(v[f_imm][1].arg) == 0:
+            if f_imm in v and int(v[f_imm][1]) == 0:
                 v = dict(v)
                 del(v[f_imm])
                 new_v_cand.append(v)
@@ -1986,7 +1985,7 @@ class x86_rm_arg(m_arg):
             # patch value in modrm
             if f_imm in v:
                 size, disp = v[f_imm]
-                disp = int(disp.arg)
+                disp = int(disp)
 
                 v[f_imm] = size
             vo = v
@@ -2580,7 +2579,7 @@ class bs_cl1(bsi, m_arg):
     def encode(self):
         if self.expr == regs08_expr[1]:
             self.value = 1
-        elif isinstance(self.expr, ExprInt) and int(self.expr.arg) == 1:
+        elif isinstance(self.expr, ExprInt) and int(self.expr) == 1:
             self.value = 0
         else:
             return False
@@ -2703,7 +2702,7 @@ class bs_cond_imm(bs_cond_scale, m_arg):
         else:
             l = self.parent.v_opmode()
         if isinstance(self.expr, ExprInt):
-            v = int(self.expr.arg)
+            v = int(self.expr)
             mask = ((1 << l) - 1)
             self.expr = ExprInt(v & mask, l)
 
@@ -2733,7 +2732,7 @@ class bs_cond_imm(bs_cond_scale, m_arg):
         self.parent.rex_w.value = 0
         # special case for push
         if len(self.parent.args) == 1:
-            v = int(self.expr.arg)
+            v = int(self.expr)
             l = self.parent.v_opmode()
             l = min(l, self.max_size)
 
@@ -2750,7 +2749,7 @@ class bs_cond_imm(bs_cond_scale, m_arg):
             self.parent.rex_w.value = 1
 
         l = self.parent.v_opmode()
-        v = int(self.expr.arg)
+        v = int(self.expr)
         if arg0_expr.size == 8:
             if not hasattr(self.parent, 'w8'):
                 raise StopIteration
@@ -2826,7 +2825,7 @@ class bs_rel_off(bs_cond_imm):
         self.expr = expr
         l = self.parent.mode
         if isinstance(self.expr, ExprInt):
-            v = int(self.expr.arg)
+            v = int(self.expr)
             mask = ((1 << l) - 1)
             self.expr = ExprInt(v & mask, l)
         return start, stop
@@ -2889,7 +2888,7 @@ class bs_s08(bs_rel_off):
             l = self.parent.v_opmode()
             self.l = l
         l = offsize(self.parent)
-        v = int(self.expr.arg)
+        v = int(self.expr)
         mask = ((1 << self.l) - 1)
         if self.l > l:
             raise StopIteration
@@ -2936,7 +2935,7 @@ class bs_moff(bsi):
             self.l = 16
         else:
             self.l = 32
-        v = int(m.args[1].arg)
+        v = int(m.args[1])
         mask = ((1 << self.l) - 1)
         if v != sign_ext(v & mask, self.l, l):
             raise StopIteration
@@ -2995,7 +2994,7 @@ class bs_movoff(m_arg):
         if not isinstance(self.expr, ExprMem) or not isinstance(self.expr.arg, ExprInt):
             raise StopIteration
         self.l = p.v_admode()
-        v = int(self.expr.arg.arg)
+        v = int(self.expr.arg)
         mask = ((1 << self.l) - 1)
         if v != mask & v:
             raise StopIteration
@@ -3051,7 +3050,7 @@ class bs_msegoff(m_arg):
         if not isinstance(self.expr.args[1], ExprInt):
             raise StopIteration
         l = self.parent.v_opmode()
-        v = int(self.expr.args[0].arg)
+        v = int(self.expr.args[0])
         mask = ((1 << self.l) - 1)
         if v != sign_ext(v & mask, self.l, l):
             raise StopIteration
@@ -3879,7 +3878,7 @@ addop("shrd", [bs8(0x0f), bs8(0xac)] +
 addop("shrd", [bs8(0x0f), bs8(0xad)] +
       rmmod(rmreg) + [d_cl], [rm_arg, rmreg, d_cl])
 addop("sidt", [bs8(0x0f), bs8(0x01)] + rmmod(d1, modrm=mod_mem))
-addop("sldt", [bs8(0x0f), bs8(0x00)] + rmmod(d0, modrm=mod_mem))
+addop("sldt", [bs8(0x0f), bs8(0x00)] + rmmod(d0, rm_arg_x=rm_arg_reg_m16))
 addop("smsw", [bs8(0x0f), bs8(0x01)] + rmmod(d4))
 addop("stc", [bs8(0xf9)])
 addop("std", [bs8(0xfd)])
@@ -4315,10 +4314,7 @@ addop("pextrq", [bs8(0x0f), bs8(0x3a), bs8(0x16), pref_66] +
 
 
 addop("pextrw", [bs8(0x0f), bs8(0x3a), bs8(0x15), pref_66] +
-      rmmod(xmm_reg, rm_arg_m16) + [u08], [rm_arg_m16, xmm_reg, u08])
-#addop("pextrw", [bs8(0x0f), bs8(0x3a), bs8(0x15), no_xmm_pref] +
-#      rmmod(mm_reg, rm_arg_m16) + [u08], [rm_arg_m16, mm_reg, u08])
-
+      rmmod(xmm_reg, rm_arg_reg_m16) + [u08], [rm_arg_reg_m16, xmm_reg, u08])
 addop("pextrw", [bs8(0x0f), bs8(0xc5), no_xmm_pref] +
       rmmod(mm_reg, rm_arg_reg_m16) + [u08], [rm_arg_reg_m16, mm_reg, u08])
 addop("pextrw", [bs8(0x0f), bs8(0xc5), pref_66] +

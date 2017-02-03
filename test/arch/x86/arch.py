@@ -2128,8 +2128,12 @@ reg_tests = [
 
     (m32, "00000000    SIDT       DWORD PTR [EAX]",
      "0f0108"),
-    (m32, "00000000    SLDT       DWORD PTR [EAX]",
+    (m32, "00000000    SLDT       WORD PTR [EAX]",
      "0f0000"),
+    (m32, "00000000    SLDT       EAX",
+     "0f00C0"),
+    (m32, "00000000    SLDT       AX",
+     "660f00C0"),
 
 
     (m32, "00000000    LGDT       DWORD PTR [EAX]",
@@ -2886,6 +2890,9 @@ reg_tests = [
     "660F3A161205"),
     (m64, "00000000    PEXTRQ     QWORD PTR [RDX], XMM2, 0x5",
     "66480F3A161205"),
+
+    (m64, "00000000    PEXTRW     RCX, XMM14, 0x5",
+    "664C0F3A15F105"),
 
 
     (m32, "00000000    UNPCKHPS   XMM2, XMMWORD PTR [EDX]",
