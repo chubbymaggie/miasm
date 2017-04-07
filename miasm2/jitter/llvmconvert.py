@@ -16,7 +16,7 @@ from llvmlite import binding as llvm
 from llvmlite import ir as llvm_ir
 import miasm2.expression.expression as m2_expr
 import miasm2.jitter.csts as m2_csts
-import miasm2.core.asmbloc as m2_asmbloc
+import miasm2.core.asmblock as m2_asmblock
 from miasm2.jitter.codegen import CGen
 from miasm2.expression.expression_helper import possible_values
 
@@ -508,9 +508,9 @@ class LLVMFunction():
         @label: str or asmlabel instance"""
         if isinstance(label, str):
             return label
-        elif isinstance(label, m2_asmbloc.asm_label):
+        elif isinstance(label, m2_asmblock.AsmLabel):
             return "label_%s" % label.name
-        elif m2_asmbloc.expr_is_label(label):
+        elif m2_asmblock.expr_is_label(label):
             return "label_%s" % label.name.name
         else:
             raise ValueError("label must either be str or asmlabel")
@@ -735,11 +735,8 @@ class LLVMFunction():
 
                 ret = builder.call(fc_ptr,
                                    [self.local_vars["jitcpu"]] + casted_args)
-                # Ret size is not expr.size on segm2addr (which is the size of
-                # the segment, for instance 16 bits), but the size of an addr
-                ret_size = self.llvm_context.PC.size
-                if ret.type.width > ret_size:
-                    ret = builder.trunc(ret, LLVMType.IntType(ret_size))
+                if ret.type.width > expr.size:
+                    ret = builder.trunc(ret, LLVMType.IntType(expr.size))
                 self.update_cache(expr, ret)
                 return ret
 
@@ -948,7 +945,7 @@ class LLVMFunction():
         if isinstance(offset, (int, long)):
             offset = self.add_ir(m2_expr.ExprInt(offset, PC.size))
         self.affect(offset, PC)
-        self.affect(self.add_ir(m2_expr.ExprInt8(1)), m2_expr.ExprId("status"))
+        self.affect(self.add_ir(m2_expr.ExprInt(1, 8)), m2_expr.ExprId("status"))
         self.set_ret(offset)
 
         builder.position_at_end(merge_block)
@@ -995,7 +992,7 @@ class LLVMFunction():
         if isinstance(offset, (int, long)):
             offset = self.add_ir(m2_expr.ExprInt(offset, PC.size))
         self.affect(offset, PC)
-        self.affect(self.add_ir(m2_expr.ExprInt8(1)), m2_expr.ExprId("status"))
+        self.affect(self.add_ir(m2_expr.ExprInt(1, 8)), m2_expr.ExprId("status"))
         self.set_ret(offset)
 
         builder.position_at_end(merge_block)
@@ -1041,7 +1038,7 @@ class LLVMFunction():
             index = dst2case.get(value, i)
             to_eval = to_eval.replace_expr({value: m2_expr.ExprInt(index, value.size)})
             dst2case[value] = index
-            if m2_asmbloc.expr_is_int_or_label(value):
+            if m2_asmblock.expr_is_int_or_label(value):
                 case2dst[i] = value
             else:
                 case2dst[i] = self.add_ir(value)
@@ -1071,7 +1068,7 @@ class LLVMFunction():
             dst = m2_expr.ExprId(self.llvm_context.ir_arch.symbol_pool.getby_offset_create(int(dst)),
                                  dst.size)
 
-        if m2_asmbloc.expr_is_label(dst):
+        if m2_asmblock.expr_is_label(dst):
             bbl = self.get_basic_bloc_by_label(dst)
             offset = dst.name.offset
             if bbl is not None:
@@ -1105,7 +1102,7 @@ class LLVMFunction():
         self.gen_post_code(attrib)
         self.affect(dst, PC)
         self.gen_post_instr_checks(attrib, dst)
-        self.affect(self.add_ir(m2_expr.ExprInt8(0)), m2_expr.ExprId("status"))
+        self.affect(self.add_ir(m2_expr.ExprInt(0, 8)), m2_expr.ExprId("status"))
         self.set_ret(dst)
 
 
@@ -1201,7 +1198,7 @@ class LLVMFunction():
         builder = self.builder
         m2_exception_flag = self.llvm_context.ir_arch.arch.regs.exception_flags
         t_size = LLVMType.IntType(m2_exception_flag.size)
-        self.affect(self.add_ir(m2_expr.ExprInt8(1)),
+        self.affect(self.add_ir(m2_expr.ExprInt(1, 8)),
                     m2_expr.ExprId("status"))
         self.affect(t_size(m2_csts.EXCEPT_UNK_MNEMO),
                     m2_exception_flag)
@@ -1219,7 +1216,7 @@ class LLVMFunction():
             builder.position_at_end(self.get_basic_bloc_by_label(next_label))
 
             # Common code
-            self.affect(self.add_ir(m2_expr.ExprInt8(0)),
+            self.affect(self.add_ir(m2_expr.ExprInt(0, 8)),
                         m2_expr.ExprId("status"))
 
             # Check if IRDst has been set
@@ -1243,7 +1240,7 @@ class LLVMFunction():
             PC = self.llvm_context.PC
             to_ret = self.add_ir(codegen.delay_slot_dst)
             self.affect(to_ret, PC)
-            self.affect(self.add_ir(m2_expr.ExprInt8(0)),
+            self.affect(self.add_ir(m2_expr.ExprInt(0, 8)),
                         m2_expr.ExprId("status"))
             self.set_ret(to_ret)
 
@@ -1279,7 +1276,7 @@ class LLVMFunction():
         self.init_fc()
         self.local_vars_pointers["status"] = self.local_vars["status"]
 
-        if isinstance(asmblock, m2_asmbloc.asm_block_bad):
+        if isinstance(asmblock, m2_asmblock.AsmBlockBad):
             self.gen_bad_block(asmblock)
             return
 

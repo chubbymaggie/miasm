@@ -7,7 +7,7 @@ from miasm2.core.cpu import *
 from collections import defaultdict
 import miasm2.arch.x86.regs as regs_module
 from miasm2.arch.x86.regs import *
-from miasm2.core.asmbloc import asm_label
+from miasm2.core.asmblock import AsmLabel
 
 log = logging.getLogger("x86_arch")
 console_handler = logging.StreamHandler()
@@ -223,18 +223,14 @@ variable, operand, base_expr = gen_base_expr()
 
 
 def ast_id2expr(t):
-    if not t in mn_x86.regs.all_regs_ids_byname:
-        r = ExprId(asm_label(t))
-    else:
-        r = mn_x86.regs.all_regs_ids_byname[t]
-    return r
+    return mn_x86.regs.all_regs_ids_byname.get(t, t)
 
 
 def ast_int2expr(a):
-    return ExprInt64(a)
+    return ExprInt(a, 64)
 
 
-my_var_parser = parse_ast(ast_id2expr, ast_int2expr)
+my_var_parser = ParseAst(ast_id2expr, ast_int2expr)
 base_expr.setParseAction(my_var_parser)
 
 int_or_expr = base_expr
@@ -493,7 +489,7 @@ class instruction_x86(instruction):
             return
         expr = self.args[0]
         if isinstance(expr, ExprId):
-            if not isinstance(expr.name, asm_label) and expr not in all_regs_ids:
+            if not isinstance(expr.name, AsmLabel) and expr not in all_regs_ids:
                 raise ValueError("ExprId must be a label or a register")
         elif isinstance(expr, ExprInt):
             ad = expr.arg + int(self.offset)
@@ -596,7 +592,7 @@ class instruction_x86(instruction):
                 prefix = ""
             sz = SIZE2MEMPREFIX[expr.size]
             segm = ""
-            if expr.is_op_segm():
+            if expr.is_mem_segm():
                 segm = "%s:" % expr.arg.args[0]
                 expr = expr.arg.args[1]
             else:
@@ -1130,7 +1126,7 @@ class x86_s08to16(x86_imm):
     out_size = 16
 
     def myexpr(self, x):
-        return ExprInt16(x)
+        return ExprInt(x, 16)
 
     def int2expr(self, v):
         return self.myexpr(v)
@@ -1147,7 +1143,7 @@ class x86_s08to16(x86_imm):
         v = v & self.lmask
         v = self.decodeval(v)
         if self.parent.v_opmode() == 64:
-            self.expr = ExprInt64(sign_ext(v, self.in_size, 64))
+            self.expr = ExprInt(sign_ext(v, self.in_size, 64), 64)
         else:
             if (1 << (self.l - 1)) & v:
                 v = sign_ext(v, self.l, self.out_size)
@@ -1195,15 +1191,15 @@ class x86_s08to32(x86_s08to16):
     out_size = 32
 
     def myexpr(self, x):
-        return ExprInt32(x)
+        return ExprInt(x, 32)
 
     def decode(self, v):
         v = v & self.lmask
         v = self.decodeval(v)
         if self.parent.rex_w.value == 1:
-            v = ExprInt64(sign_ext(v, self.in_size, 64))
+            v = ExprInt(sign_ext(v, self.in_size, 64), 64)
         else:
-            v = ExprInt32(sign_ext(v, self.in_size, 32))
+            v = ExprInt(sign_ext(v, self.in_size, 32), 32)
 
         self.expr = v
         return True
@@ -1214,7 +1210,7 @@ class x86_s08to64(x86_s08to32):
     out_size = 64
 
     def myexpr(self, x):
-        return ExprInt64(x)
+        return ExprInt(x, 64)
 
 
 class x86_s32to64(x86_s08to32):
@@ -1222,7 +1218,7 @@ class x86_s32to64(x86_s08to32):
     out_size = 64
 
     def myexpr(self, x):
-        return ExprInt64(x)
+        return ExprInt(x, 64)
 
 
 class bs_eax(m_arg):
@@ -1720,10 +1716,10 @@ SIZE2XMMREG = {64:gpregs_mm,
 def parse_mem(expr, parent, w8, sx=0, xmm=0, mm=0):
     dct_expr = {}
     opmode = parent.v_opmode()
-    if expr.is_op_segm() and isinstance(expr.arg.args[0], ExprInt):
+    if expr.is_mem_segm() and expr.arg.args[0].is_int():
         return None, None, False
 
-    if expr.is_op_segm():
+    if expr.is_mem_segm():
         segm = expr.arg.args[0]
         ptr = expr.arg.args[1]
     else:
@@ -1758,15 +1754,15 @@ def parse_mem(expr, parent, w8, sx=0, xmm=0, mm=0):
     out = []
     if disp is None:
         # add 0 disp
-        disp = ExprInt32(0)
+        disp = ExprInt(0, 32)
     if disp is not None:
-        for signed, encoding, cast_int in [(True, f_s08, ExprInt8),
-                                           (True, f_s16, ExprInt16),
-                                           (True, f_s32, ExprInt32),
-                                           (False, f_u08, ExprInt8),
-                                           (False, f_u16, ExprInt16),
-                                           (False, f_u32, ExprInt32)]:
-            value = cast_int(int(disp))
+        for signed, encoding, cast_size in [(True, f_s08, 8),
+                                           (True, f_s16, 16),
+                                           (True, f_s32, 32),
+                                           (False, f_u08, 8),
+                                           (False, f_u16, 16),
+                                           (False, f_u32, 32)]:
+            value = ExprInt(int(disp), cast_size)
             if admode < value.size:
                 if signed:
                     if int(disp.arg) != sign_ext(int(value), admode, disp.size):
@@ -2445,6 +2441,8 @@ class x86_rm_reg_noarg(object):
         if p.v_opmode() == 64 or p.rex_p.value == 1:
             if not hasattr(p, 'sx') and (hasattr(p, 'w8') and p.w8.value == 0):
                 r = gpregs08_64
+            elif p.rex_r.value == 1:
+                v |= 8
         self.expr = r.expr[v]
         return True
 
@@ -2526,6 +2524,16 @@ class x86_reg(x86_rm_reg):
         self.parent.rex_b.value = v
 
 
+class x86_reg_modrm(x86_rm_reg):
+
+    def getrexsize(self):
+        return self.parent.rex_r.value
+
+    def setrexsize(self, v):
+        self.parent.rex_r.value = v
+
+
+
 class x86_reg_noarg(x86_rm_reg_noarg):
 
     def getrexsize(self):
@@ -2573,7 +2581,7 @@ class bs_cl1(bsi, m_arg):
         if v == 1:
             self.expr = regs08_expr[1]
         else:
-            self.expr = ExprInt8(1)
+            self.expr = ExprInt(1, 8)
         return True
 
     def encode(self):
@@ -3061,7 +3069,7 @@ class bs_msegoff(m_arg):
         opmode = self.parent.v_opmode()
         v = swap_uint(self.l, v)
         self.value = v
-        v = ExprInt16(v)
+        v = ExprInt(v, 16)
         self.expr = ExprOp('segm', v, self.parent.off.expr)
         return True
 
@@ -3176,6 +3184,10 @@ mod_mem = bs(l=2, cls=(bs_mem,), fname="mod")
 
 rmreg = bs(l=3, cls=(x86_rm_reg, ), order =1, fname = "reg")
 reg = bs(l=3, cls=(x86_reg, ), order =1, fname = "reg")
+
+reg_modrm = bs(l=3, cls=(x86_reg_modrm, ), order =1, fname = "reg")
+
+
 regnoarg = bs(l=3, default_val="000", order=1, fname="reg")
 segm = bs(l=3, cls=(x86_rm_segm, ), order =1, fname = "reg")
 crreg = bs(l=3, cls=(x86_rm_cr, ), order =1, fname = "reg")
@@ -3690,7 +3702,7 @@ addop("movq", [bs8(0x0f), bs8(0xd6), pref_66] +
       rmmod(xmm_reg, rm_arg_xmm_m64), [rm_arg_xmm_m64, xmm_reg])
 
 addop("movmskps", [bs8(0x0f), bs8(0x50), no_xmm_pref] +
-      rmmod(reg, rm_arg_xmm_reg))
+      rmmod(reg_modrm, rm_arg_xmm_reg))
 
 
 addop("addss", [bs8(0x0f), bs8(0x58), pref_f3] + rmmod(xmm_reg, rm_arg_xmm_m32))
@@ -4194,6 +4206,9 @@ addop("psllw", [bs8(0x0f), bs8(0xf1), no_xmm_pref] +
 addop("psllw", [bs8(0x0f), bs8(0xf1), pref_66] +
       rmmod(xmm_reg, rm_arg_xmm), [xmm_reg, rm_arg_xmm])
 
+addop("pslldq", [bs8(0x0f), bs8(0x73), pref_66] +
+      rmmod(d7, rm_arg_xmm) + [u08], [rm_arg_xmm, u08])
+
 
 addop("pmaxub", [bs8(0x0f), bs8(0xde), no_xmm_pref] +
       rmmod(mm_reg, rm_arg_mm))
@@ -4331,9 +4346,9 @@ addop("sqrtss", [bs8(0x0f), bs8(0x51), pref_f3] +
       rmmod(xmm_reg, rm_arg_xmm_m32))
 
 addop("pmovmskb", [bs8(0x0f), bs8(0xd7), no_xmm_pref] +
-      rmmod(reg, rm_arg_mm_reg))
+      rmmod(reg_modrm, rm_arg_mm_reg))
 addop("pmovmskb", [bs8(0x0f), bs8(0xd7), pref_66] +
-      rmmod(reg, rm_arg_xmm_reg))
+      rmmod(reg_modrm, rm_arg_xmm_reg))
 
 addop("shufps", [bs8(0x0f), bs8(0xc6), no_xmm_pref] +
       rmmod(xmm_reg, rm_arg_xmm) + [u08])

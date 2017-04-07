@@ -30,7 +30,8 @@
 
 import itertools
 from operator import itemgetter
-from miasm2.expression.modint import *
+from miasm2.expression.modint import mod_size2uint, is_modint, size2mask, \
+    define_uint
 from miasm2.core.graph import DiGraph
 import warnings
 
@@ -143,10 +144,6 @@ class Expr(object):
             Expr.args2expr[(cls, args)] = expr
         return expr
 
-    def __new__(cls, *args, **kwargs):
-        expr = object.__new__(cls, *args, **kwargs)
-        return expr
-
     def get_is_canon(self):
         return self in Expr.canon_exprs
 
@@ -187,23 +184,18 @@ class Expr(object):
             self.__hash = self._exprhash()
         return self.__hash
 
-    def pre_eq(self, other):
-        """Return True if ids are equal;
-        False if instances are obviously not equal
-        None if we cannot simply decide"""
-
-        if id(self) == id(other):
+    def __eq__(self, other):
+        if self is other:
             return True
+        elif self.use_singleton:
+            # In case of Singleton, pointer comparison is sufficient
+            # Avoid computation of hash and repr
+            return False
+
         if self.__class__ is not other.__class__:
             return False
         if hash(self) != hash(other):
             return False
-        return None
-
-    def __eq__(self, other):
-        res = self.pre_eq(other)
-        if res is not None:
-            return res
         return repr(self) == repr(other)
 
     def __ne__(self, a):
@@ -246,8 +238,7 @@ class Expr(object):
         return ExprOp("**",self, a)
 
     def __invert__(self):
-        s = self.size
-        return ExprOp('^', self, ExprInt(mod_size2uint[s](size2mask(s))))
+        return ExprOp('^', self, self.mask)
 
     def copy(self):
         "Deep copy of the expression"
@@ -377,6 +368,13 @@ class Expr(object):
     def is_compose(self):
         return False
 
+    def is_op_segm(self):
+        """Returns True if is ExprOp and op == 'segm'"""
+        return False
+
+    def is_mem_segm(self):
+        """Returns True if is ExprMem and ptr is_op_segm"""
+        return False
 
 class ExprInt(Expr):
 
@@ -391,39 +389,43 @@ class ExprInt(Expr):
     __slots__ = Expr.__slots__ + ["__arg"]
 
 
-    def __init__(self, num, size=None):
+    def __init__(self, arg, size):
         """Create an ExprInt from a modint or num/size
-        @arg: modint or num
-        @size: (optionnal) int size"""
-
+        @arg: 'intable' number
+        @size: int size"""
         super(ExprInt, self).__init__()
-
-        if is_modint(num):
-            self.__arg = num
-            self.__size = self.arg.size
-            if size is not None and num.size != size:
-                raise RuntimeError("size must match modint size")
-        elif size is not None:
-            if size not in mod_size2uint:
-                define_uint(size)
-            self.__arg = mod_size2uint[size](num)
-            self.__size = self.arg.size
-        else:
-            raise ValueError('arg must by modint or (int,size)! %s' % num)
+        # Work is done in __new__
 
     size = property(lambda self: self.__size)
     arg = property(lambda self: self.__arg)
 
-    def __getstate__(self):
-        return int(self.__arg), self.__size
+    def __reduce__(self):
+        state = int(self.__arg), self.__size
+        return self.__class__, state
 
-    def __setstate__(self, state):
-        self.__init__(*state)
+    def __new__(cls, arg, size):
+        """Create an ExprInt from a modint or num/size
+        @arg: 'intable' number
+        @size: int size"""
 
-    def __new__(cls, arg, size=None):
-        if size is None:
-            size = arg.size
-        return Expr.get_object(cls, (arg, size))
+        if is_modint(arg):
+            assert size == arg.size
+        # Avoid a common blunder
+        assert not isinstance(arg, ExprInt)
+
+        # Ensure arg is always a moduint
+        arg = int(arg)
+        if size not in mod_size2uint:
+            define_uint(size)
+        arg = mod_size2uint[size](arg)
+
+        # Get the Singleton instance
+        expr = Expr.get_object(cls, (arg, size))
+
+        # Save parameters (__init__ is called with parameters unchanged)
+        expr.__arg = arg
+        expr.__size = expr.__arg.size
+        return expr
 
     def __get_int(self):
         "Return self integer representation"
@@ -459,7 +461,7 @@ class ExprInt(Expr):
         return self
 
     def copy(self):
-        return ExprInt(self.__arg)
+        return ExprInt(self.__arg, self.__size)
 
     def depth(self):
         return 1
@@ -503,11 +505,9 @@ class ExprId(Expr):
     size = property(lambda self: self.__size)
     name = property(lambda self: self.__name)
 
-    def __getstate__(self):
-        return self.__name, self.__size
-
-    def __setstate__(self, state):
-        self.__init__(*state)
+    def __reduce__(self):
+        state = self.__name, self.__size
+        return self.__class__, state
 
     def __new__(cls, name, size=32):
         return Expr.get_object(cls, (name, size))
@@ -573,33 +573,32 @@ class ExprAff(Expr):
                 "sanitycheck: ExprAff args must have same size! %s" %
                              ([(str(arg), arg.size) for arg in [dst, src]]))
 
-        if isinstance(dst, ExprSlice):
-            # Complete the source with missing slice parts
-            self.__dst = dst.arg
-            rest = [(ExprSlice(dst.arg, r[0], r[1]), r[0], r[1])
-                    for r in dst.slice_rest()]
-            all_a = [(src, dst.start, dst.stop)] + rest
-            all_a.sort(key=lambda x: x[1])
-            args = [expr for (expr, _, _) in all_a]
-            self.__src = ExprCompose(*args)
-
-        else:
-            self.__dst, self.__src = dst, src
-
         self.__size = self.dst.size
 
     size = property(lambda self: self.__size)
     dst = property(lambda self: self.__dst)
     src = property(lambda self: self.__src)
 
-    def __getstate__(self):
-        return self.__dst, self.__src
 
-    def __setstate__(self, state):
-        self.__init__(*state)
+    def __reduce__(self):
+        state = self.__dst, self.__src
+        return self.__class__, state
 
     def __new__(cls, dst, src):
-        return Expr.get_object(cls, (dst, src))
+        if isinstance(dst, ExprSlice):
+            # Complete the source with missing slice parts
+            new_dst = dst.arg
+            rest = [(ExprSlice(dst.arg, r[0], r[1]), r[0], r[1])
+                    for r in dst.slice_rest()]
+            all_a = [(src, dst.start, dst.stop)] + rest
+            all_a.sort(key=lambda x: x[1])
+            args = [expr for (expr, _, _) in all_a]
+            new_src = ExprCompose(*args)
+        else:
+            new_dst, new_src = dst, src
+        expr = Expr.get_object(cls, (new_dst, new_src))
+        expr.__dst, expr.__src = new_dst, new_src
+        return expr
 
     def __str__(self):
         return "%s = %s" % (str(self.__dst), str(self.__src))
@@ -681,11 +680,9 @@ class ExprCond(Expr):
     src1 = property(lambda self: self.__src1)
     src2 = property(lambda self: self.__src2)
 
-    def __getstate__(self):
-        return self.__cond, self.__src1, self.__src2
-
-    def __setstate__(self, state):
-        self.__init__(*state)
+    def __reduce__(self):
+        state = self.__cond, self.__src1, self.__src2
+        return self.__class__, state
 
     def __new__(cls, cond, src1, src2):
         return Expr.get_object(cls, (cond, src1, src2))
@@ -775,11 +772,9 @@ class ExprMem(Expr):
     size = property(lambda self: self.__size)
     arg = property(lambda self: self.__arg)
 
-    def __getstate__(self):
-        return self.__arg, self.__size
-
-    def __setstate__(self, state):
-        self.__init__(*state)
+    def __reduce__(self):
+        state = self.__arg, self.__size
+        return self.__class__, state
 
     def __new__(cls, arg, size=32):
         return Expr.get_object(cls, (arg, size))
@@ -817,8 +812,9 @@ class ExprMem(Expr):
         arg = self.arg.copy()
         return ExprMem(arg, size=self.size)
 
-    def is_op_segm(self):
-        return isinstance(self.__arg, ExprOp) and self.__arg.op == 'segm'
+    def is_mem_segm(self):
+        """Returns True if is ExprMem and ptr is_op_segm"""
+        return self.__arg.is_op_segm()
 
     def depth(self):
         return self.__arg.depth() + 1
@@ -864,7 +860,8 @@ class ExprOp(Expr):
         if not isinstance(op, str):
             raise ValueError("ExprOp: 'op' argument must be a string")
 
-        self.__op, self.__args = op, tuple(args)
+        assert isinstance(args, tuple)
+        self.__op, self.__args = op, args
 
         # Set size for special cases
         if self.__op in [
@@ -915,12 +912,9 @@ class ExprOp(Expr):
     op = property(lambda self: self.__op)
     args = property(lambda self: self.__args)
 
-    def __getstate__(self):
-        return self.__op, self.__args
-
-    def __setstate__(self, state):
-        op, args = state
-        self.__init__(op, *args)
+    def __reduce__(self):
+        state = tuple([self.__op] + list(self.__args))
+        return self.__class__, state
 
     def __new__(cls, op, *args):
         return Expr.get_object(cls, (op, args))
@@ -1002,6 +996,10 @@ class ExprOp(Expr):
             return True
         return self.op == op
 
+    def is_op_segm(self):
+        """Returns True if is ExprOp and op == 'segm'"""
+        return self.is_op('segm')
+
 class ExprSlice(Expr):
 
     __slots__ = Expr.__slots__ + ["__arg", "__start", "__stop"]
@@ -1018,11 +1016,9 @@ class ExprSlice(Expr):
     start = property(lambda self: self.__start)
     stop = property(lambda self: self.__stop)
 
-    def __getstate__(self):
-        return self.__arg, self.__start, self.__stop
-
-    def __setstate__(self, state):
-        self.__init__(*state)
+    def __reduce__(self):
+        state = self.__arg, self.__start, self.__stop
+        return self.__class__, state
 
     def __new__(cls, arg, start, stop):
         return Expr.get_object(cls, (arg, start, stop))
@@ -1109,30 +1105,19 @@ class ExprCompose(Expr):
         """
 
         super(ExprCompose, self).__init__()
-
-        is_new_style = args and isinstance(args[0], Expr)
-        if not is_new_style:
-            warnings.warn('DEPRECATION WARNING: use "ExprCompose(a, b) instead of'+
-                          'ExprCemul_ir_block(self, addr, step=False)" instead of emul_ir_bloc')
-
-        self.__args = tuple(args)
+        assert isinstance(args, tuple)
+        self.__args = args
         self.__size = sum([arg.size for arg in args])
 
     size = property(lambda self: self.__size)
     args = property(lambda self: self.__args)
 
-    def __getstate__(self):
-        return self.__args
-
-    def __setstate__(self, state):
-        self.__init__(*state)
+    def __reduce__(self):
+        state = self.__args
+        return self.__class__, state
 
     def __new__(cls, *args):
-        is_new_style = args and isinstance(args[0], Expr)
-        if not is_new_style:
-            assert len(args) == 1
-            args = args[0]
-        return Expr.get_object(cls, tuple(args))
+        return Expr.get_object(cls, args)
 
     def __str__(self):
         return '{' + ', '.join(["%s %s %s" % (arg, idx, idx + arg.size) for idx, arg in self.iter_args()]) + '}'
@@ -1309,28 +1294,40 @@ def canonize_expr_list_compose(l):
 
 
 def ExprInt1(i):
-    return ExprInt(uint1(i))
+    warnings.warn('DEPRECATION WARNING: use ExprInt(i, 1) instead of '\
+                  'ExprInt1(i))')
+    return ExprInt(i, 1)
 
 
 def ExprInt8(i):
-    return ExprInt(uint8(i))
+    warnings.warn('DEPRECATION WARNING: use ExprInt(i, 8) instead of '\
+                  'ExprInt8(i))')
+    return ExprInt(i, 8)
 
 
 def ExprInt16(i):
-    return ExprInt(uint16(i))
+    warnings.warn('DEPRECATION WARNING: use ExprInt(i, 16) instead of '\
+                  'ExprInt16(i))')
+    return ExprInt(i, 16)
 
 
 def ExprInt32(i):
-    return ExprInt(uint32(i))
+    warnings.warn('DEPRECATION WARNING: use ExprInt(i, 32) instead of '\
+                  'ExprInt32(i))')
+    return ExprInt(i, 32)
 
 
 def ExprInt64(i):
-    return ExprInt(uint64(i))
+    warnings.warn('DEPRECATION WARNING: use ExprInt(i, 64) instead of '\
+                  'ExprInt64(i))')
+    return ExprInt(i, 64)
 
 
 def ExprInt_from(e, i):
     "Generate ExprInt with size equal to expression"
-    return ExprInt(mod_size2uint[e.size](i))
+    warnings.warn('DEPRECATION WARNING: use ExprInt(i, expr.size) instead of'\
+                  'ExprInt_from(expr, i))')
+    return ExprInt(i, e.size)
 
 
 def get_expr_ids_visit(e, ids):

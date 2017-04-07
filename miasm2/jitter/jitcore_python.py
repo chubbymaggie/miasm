@@ -13,6 +13,8 @@ from miasm2.jitter.emulatedsymbexec import EmulatedSymbExec
 class JitCore_Python(jitcore.JitCore):
     "JiT management, using Miasm2 Symbol Execution engine as backend"
 
+    SymbExecClass = EmulatedSymbExec
+
     def __init__(self, ir_arch, bs=None):
         super(JitCore_Python, self).__init__(ir_arch, bs)
         self.ir_arch = ir_arch
@@ -20,8 +22,8 @@ class JitCore_Python(jitcore.JitCore):
         # CPU & VM (None for now) will be set later
         expr_simp = ExpressionSimplifier()
         expr_simp.enable_passes(ExpressionSimplifier.PASS_COMMONS)
-        self.symbexec = EmulatedSymbExec(None, None, self.ir_arch, {},
-                                         sb_expr_simp=expr_simp)
+        self.symbexec = self.SymbExecClass(None, None, self.ir_arch, {},
+                                           sb_expr_simp=expr_simp)
         self.symbexec.enable_emulated_simplifications()
 
     def set_cpu_vm(self, cpu, vm):
@@ -32,10 +34,10 @@ class JitCore_Python(jitcore.JitCore):
         "Preload symbols according to current architecture"
         self.symbexec.reset_regs()
 
-    def jitirblocs(self, label, irblocs):
-        """Create a python function corresponding to an irblocs' group.
-        @label: the label of the irblocs
-        @irblocs: a gorup of irblocs
+    def jitirblocs(self, label, irblocks):
+        """Create a python function corresponding to an irblocks' group.
+        @label: the label of the irblocks
+        @irblocks: a gorup of irblocks
         """
 
         def myfunc(cpu):
@@ -45,7 +47,7 @@ class JitCore_Python(jitcore.JitCore):
             # Get virtual memory handler
             vmmngr = cpu.vmmngr
 
-            # Keep current location in irblocs
+            # Keep current location in irblocks
             cur_label = label
 
             # Required to detect new instructions
@@ -55,15 +57,15 @@ class JitCore_Python(jitcore.JitCore):
             exec_engine = self.symbexec
             expr_simp = exec_engine.expr_simp
 
-            # For each irbloc inside irblocs
+            # For each irbloc inside irblocks
             while True:
 
                 # Get the current bloc
-                for irb in irblocs:
+                for irb in irblocks:
                     if irb.label == cur_label:
                         break
                 else:
-                    raise RuntimeError("Irblocs must end with returning an "
+                    raise RuntimeError("Irblocks must end with returning an "
                                        "ExprInt instance")
 
                 # Refresh CPU values according to @cpu instance

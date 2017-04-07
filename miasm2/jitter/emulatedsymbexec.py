@@ -1,8 +1,8 @@
 import miasm2.expression.expression as m2_expr
-from miasm2.ir.symbexec import symbexec
+from miasm2.ir.symbexec import SymbolicExecutionEngine
 
 
-class EmulatedSymbExec(symbexec):
+class EmulatedSymbExec(SymbolicExecutionEngine):
     """Symbolic exec instance linked with a jitter"""
 
     cpuid = {
@@ -103,13 +103,11 @@ class EmulatedSymbExec(symbexec):
     # CPU specific simplifications
     def _simp_handle_segm(self, e_s, expr):
         """Handle 'segm' operation"""
-        if expr.op != "segm":
+        if not expr.is_op_segm():
             return expr
         segm_nb = int(expr.args[0])
         segmaddr = self.cpu.get_segm_base(segm_nb)
-        return e_s(m2_expr.ExprOp("+",
-                                  m2_expr.ExprInt(segmaddr, expr.size),
-                                  expr.args[1]))
+        return e_s(m2_expr.ExprInt(segmaddr, expr.size) + expr.args[1])
 
     def _simp_handle_cpuid(self, e_s, expr):
         """From miasm2/jitter/vm_mngr.h: cpuid"""

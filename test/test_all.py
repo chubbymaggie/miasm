@@ -18,6 +18,7 @@ TAGS = {"regression": "REGRESSION", # Regression tests
         "tcc": "TCC", # TCC dependency is required
         "z3": "Z3", # Z3 dependecy is needed
         "qemu": "QEMU", # QEMU tests (several tests)
+        "cparser": "CPARSER", # pycparser is needed
         }
 
 # Regression tests
@@ -229,7 +230,7 @@ for script in ["interval.py",
                "test_types.py",
                ]:
     testset += RegressionTest([script], base_dir="core")
-testset += RegressionTest(["asmbloc.py"], base_dir="core",
+testset += RegressionTest(["asmblock.py"], base_dir="core",
                           products=["graph.dot", "graph2.dot",
                                     "graph3.dot", "graph4.dot"])
 ## Expression
@@ -238,17 +239,15 @@ for script in ["modint.py",
                "stp.py",
                "simplifications.py",
                "expression_helper.py",
+               "expr_pickle.py",
                ]:
     testset += RegressionTest([script], base_dir="expression")
+
 ## IR
 for script in ["symbexec.py",
                ]:
     testset += RegressionTest([script], base_dir="ir")
-testset += RegressionTest(["analysis.py"], base_dir="ir",
-                          products=[fname for fnames in (
-            ["simp_graph_%02d.dot" % test_nb, "graph_%02d.dot" % test_nb]
-            for test_nb in xrange(1, 18))
-                                    for fname in fnames])
+
 testset += RegressionTest(["z3_ir.py"], base_dir="ir/translators",
                           tags=[TAGS["z3"]])
 testset += RegressionTest(["smt2.py"], base_dir="ir/translators",
@@ -257,6 +256,12 @@ testset += RegressionTest(["smt2.py"], base_dir="ir/translators",
 for script in ["win_api_x86_32.py",
                ]:
     testset += RegressionTest([script], base_dir="os_dep", tags=[TAGS['tcc']])
+
+for arch in ["x86_32", "x86_64", "arml", "aarch64l"]:
+    testset += RegressionTest(["test_env.py", arch, "test_env.%s" % arch, "-c",
+                               "arg1", "-c", "arg2", "--environment-vars",
+                               "TEST=TOTO", "--mimic-env"],
+                              base_dir="os_dep/linux", tags=[TAGS['tcc']])
 
 ## Analysis
 testset += RegressionTest(["depgraph.py"], base_dir="analysis",
@@ -271,7 +276,15 @@ testset += RegressionTest(["depgraph.py"], base_dir="analysis",
                                                      (12, 1), (13, 1),
                                                      (14, 1), (15, 1))
                            ])
+testset += RegressionTest(["modularintervals.py"], base_dir="analysis")
+testset += RegressionTest(["range.py"], base_dir="analysis",
+                          tags=[TAGS["z3"]])
 
+testset += RegressionTest(["data_flow.py"], base_dir="analysis",
+                          products=[fname for fnames in (
+            ["simp_graph_%02d.dot" % test_nb, "graph_%02d.dot" % test_nb]
+            for test_nb in xrange(1, 18))
+                                    for fname in fnames])
 
 ## Degraph
 class TestDepgraph(RegressionTest):
@@ -412,6 +425,8 @@ test_x86_32_if_reg = ExampleShellcode(['x86_32', 'x86_32_if_reg.S', "x86_32_if_r
 test_x86_32_seh = ExampleShellcode(["x86_32", "x86_32_seh.S", "x86_32_seh.bin",
                                     "--PE"])
 
+test_human = ExampleShellcode(["x86_64", "human.S", "human.bin"])
+
 testset += test_armb
 testset += test_arml
 testset += test_aarch64b
@@ -426,6 +441,8 @@ testset += test_mips32l
 testset += test_x86_64
 testset += test_x86_32_if_reg
 testset += test_x86_32_seh
+
+testset += test_human
 
 class ExampleDisassembler(Example):
     """Disassembler examples specificities:
@@ -455,9 +472,9 @@ class ExampleDisasmFull(ExampleDisassembler):
 
     def __init__(self, *args, **kwargs):
         super(ExampleDisasmFull, self).__init__(*args, **kwargs)
-        self.command_line = ["full.py", "-g", "-s", "-m"] + self.command_line
-        self.products += ["graph_execflow.dot", "graph_irflow.dot",
-                          "graph_irflow_raw.dot", "lines.dot"]
+        self.command_line = ["full.py", "-g", "-s", "-d", "-m"] + self.command_line
+        self.products += ["graph_defuse.dot", "graph_execflow.dot",
+                          "graph_irflow.dot", "graph_irflow_raw.dot", "lines.dot"]
 
 
 testset += ExampleDisasmFull(["arml", Example.get_sample("demo_arm_l.bin"),
@@ -517,6 +534,14 @@ testset += ExampleExpression(["solve_condition_stp.py",
                               Example.get_sample("simple_test.bin")],
                              products=["graph_instr.dot", "out.dot"])
 
+testset += ExampleExpression(["access_c.py", Example.get_sample("human.bin")],
+                             depends=[test_human],
+                             products=["graph_irflow.dot"],
+                             tags=[TAGS["cparser"]])
+
+testset += ExampleExpression(["expr_c.py"],
+                             tags=[TAGS["cparser"]])
+
 for script in [["basic_op.py"],
                ["basic_simplification.py"],
                ["simplification_tools.py"],
@@ -524,6 +549,7 @@ for script in [["basic_op.py"],
                ["simplification_add.py"],
                ["expr_random.py"],
                ["expr_translate.py"],
+               ["expr_reduce.py"],
                ]:
     testset += ExampleExpression(script)
 
@@ -588,9 +614,10 @@ for jitter in ExampleJitter.jitter_engines:
                              tags=tags.get(jitter, []))
 
 for script, dep in [(["x86_32.py", Example.get_sample("x86_32_sc.bin")], []),
-                    (["arm.py", Example.get_sample("md5_arm"), "-a", "A684"],
+                    (["arm.py", Example.get_sample("md5_arm"), "--mimic-env"],
                      []),
-                    (["sandbox_elf_aarch64l.py", Example.get_sample("md5_aarch64l"), "-a", "0x400A00"],
+                    (["sandbox_elf_aarch64l.py",
+                      Example.get_sample("md5_aarch64l"), "--mimic-env"],
                      []),
                     (["msp430.py", Example.get_sample("msp430_sc.bin"), "0"],
                      [test_msp430]),
@@ -600,6 +627,7 @@ for script, dep in [(["x86_32.py", Example.get_sample("x86_32_sc.bin")], []),
                       "b", "-a", "0"], [test_armb]),
                     (["arm_sc.py", "0", Example.get_sample("demo_arm_l.bin"),
                       "l", "-a", "0"], [test_arml]),
+                    (["sandbox_call.py", Example.get_sample("md5_arm")], []),
                     ] + [(["sandbox_pe_x86_32.py",
                            Example.get_sample("x86_32_" + name + ".bin")],
                           [test_box[name]])
@@ -617,6 +645,8 @@ for jitter in ExampleJitterNoPython.jitter_engines:
                                      tags=tags)
 
 testset += ExampleJitter(["example_types.py"])
+testset += ExampleJitter(["trace.py", Example.get_sample("md5_arm"), "-a",
+                          "0xA684"])
 
 
 if __name__ == "__main__":
@@ -736,6 +766,16 @@ By default, all tag are considered." % ", ".join(TAGS.keys()), default="")
             "Z3 and its python binding are necessary for TranslatorZ3."
         if TAGS["z3"] not in exclude_tags:
             exclude_tags.append(TAGS["z3"])
+
+    # Handle pycparser dependency
+    try:
+        import pycparser
+    except ImportError:
+        print "%(red)s[PYCPARSER]%(end)s " % cosmetics.colors + \
+            "pycparser are necessary for Objc."
+        if TAGS["cparser"] not in exclude_tags:
+            exclude_tags.append(TAGS["cparser"])
+
     test_ko = []
     test_ok = []
 
