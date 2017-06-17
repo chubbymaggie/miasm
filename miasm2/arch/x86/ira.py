@@ -12,22 +12,8 @@ class ir_a_x86_16(ir_x86_16, ira):
         ir_x86_16.__init__(self, symbol_pool)
         self.ret_reg = self.arch.regs.AX
 
-    # for test XXX TODO
-    def set_dead_regs(self, irblock):
-        irblock.rw[-1][1].add(self.arch.regs.zf)
-        irblock.rw[-1][1].add(self.arch.regs.of)
-        irblock.rw[-1][1].add(self.arch.regs.pf)
-        irblock.rw[-1][1].add(self.arch.regs.cf)
-        irblock.rw[-1][1].add(self.arch.regs.nf)
-        irblock.rw[-1][1].add(self.arch.regs.af)
-
     def get_out_regs(self, _):
         return set([self.ret_reg, self.sp])
-
-    def add_unused_regs(self):
-        leaves = [self.blocks[label] for label in self.g.leafs()]
-        for irblock in leaves:
-            self.set_dead_regs(irblock)
 
 class ir_a_x86_32(ir_x86_32, ir_a_x86_16):
 
@@ -67,7 +53,9 @@ class ir_a_x86_64(ir_x86_64, ir_a_x86_16):
                                                           )),
                              ExprAff(self.sp, ExprOp('call_func_stack',
                                                      ad, self.sp)),
-                ])]
+                            ],
+                             instr
+                           )]
 
     def sizeof_char(self):
         return 8

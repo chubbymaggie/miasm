@@ -45,7 +45,7 @@ class jitter_x86_16(jitter):
         self.ir_arch.irbloc_fix_regs_for_mode = self.ir_archbloc_fix_regs_for_mode
 
     def ir_archbloc_fix_regs_for_mode(self, irblock, attrib=64):
-        self.orig_irbloc_fix_regs_for_mode(irblock, 64)
+        return self.orig_irbloc_fix_regs_for_mode(irblock, 64)
 
     def push_uint16_t(self, value):
         self.cpu.SP -= self.ir_arch.sp.size / 8
@@ -78,7 +78,16 @@ class jitter_x86_32(jitter):
         self.ir_arch.irbloc_fix_regs_for_mode = self.ir_archbloc_fix_regs_for_mode
 
     def ir_archbloc_fix_regs_for_mode(self, irblock, attrib=64):
-        self.orig_irbloc_fix_regs_for_mode(irblock, 64)
+        return self.orig_irbloc_fix_regs_for_mode(irblock, 64)
+
+    def push_uint16_t(self, value):
+        self.cpu.ESP -= self.ir_arch.sp.size / 8
+        self.vm.set_mem(self.cpu.ESP, pck16(value))
+
+    def pop_uint16_t(self):
+        value = upck16(self.vm.get_mem(self.cpu.ESP, self.ir_arch.sp.size / 8))
+        self.cpu.ESP += self.ir_arch.sp.size / 8
+        return value
 
     def push_uint32_t(self, value):
         self.cpu.ESP -= self.ir_arch.sp.size / 8
@@ -127,7 +136,7 @@ class jitter_x86_32(jitter):
         return ret_ad, args
 
     def func_ret_cdecl(self, ret_addr, ret_value=None):
-        self.cpu.EIP = ret_addr
+        self.pc = self.cpu.EIP = ret_addr
         if ret_value is not None:
             self.cpu.EAX = ret_value
 
@@ -140,10 +149,38 @@ class jitter_x86_32(jitter):
     get_arg_n_systemv = get_stack_arg
 
 
+    # fastcall
+    @named_arguments
+    def func_args_fastcall(self, n_args):
+        args_regs = ['ECX', 'EDX']
+        ret_ad = self.pop_uint32_t()
+        args = []
+        for i in xrange(n_args):
+            args.append(self.get_arg_n_fastcall(i))
+        return ret_ad, args
+
+    def func_prepare_fastcall(self, ret_addr, *args):
+        args_regs = ['ECX', 'EDX']
+        for i in xrange(min(len(args), len(args_regs))):
+            setattr(self.cpu, args_regs[i], args[i])
+        remaining_args = args[len(args_regs):]
+        for arg in reversed(remaining_args):
+            self.push_uint32_t(arg)
+        self.push_uint32_t(ret_addr)
+
+    def get_arg_n_fastcall(self, index):
+        args_regs = ['ECX', 'EDX']
+        if index < len(args_regs):
+            return getattr(self.cpu, args_regs[index])
+        return self.get_stack_arg(index - len(args_regs))
+
+
+
 class jitter_x86_64(jitter):
 
     C_Gen = x86_64_CGen
     args_regs_systemv = ['RDI', 'RSI', 'RDX', 'RCX', 'R8', 'R9']
+    args_regs_stdcall = ['RCX', 'RDX', 'R8', 'R9']
 
     def __init__(self, *args, **kwargs):
         sp = asmblock.AsmSymbolPool()
@@ -155,7 +192,7 @@ class jitter_x86_64(jitter):
         self.ir_arch.irbloc_fix_regs_for_mode = self.ir_archbloc_fix_regs_for_mode
 
     def ir_archbloc_fix_regs_for_mode(self, irblock, attrib=64):
-        self.orig_irbloc_fix_regs_for_mode(irblock, 64)
+        return self.orig_irbloc_fix_regs_for_mode(irblock, 64)
 
     def push_uint64_t(self, value):
         self.cpu.RSP -= self.ir_arch.sp.size / 8
@@ -178,7 +215,7 @@ class jitter_x86_64(jitter):
     # stdcall
     @named_arguments
     def func_args_stdcall(self, n_args):
-        args_regs = ['RCX', 'RDX', 'R8', 'R9']
+        args_regs = self.args_regs_stdcall
         ret_ad = self.pop_uint64_t()
         args = []
         for i in xrange(min(n_args, 4)):
@@ -186,6 +223,15 @@ class jitter_x86_64(jitter):
         for i in xrange(max(0, n_args - 4)):
             args.append(self.get_stack_arg(i))
         return ret_ad, args
+
+    def func_prepare_stdcall(self, ret_addr, *args):
+        args_regs = self.args_regs_stdcall
+        for i in xrange(min(len(args), len(args_regs))):
+            setattr(self.cpu, args_regs[i], args[i])
+        remaining_args = args[len(args_regs):]
+        for arg in reversed(remaining_args):
+            self.push_uint64_t(arg)
+        self.push_uint64_t(ret_addr)
 
     def func_ret_stdcall(self, ret_addr, ret_value=None):
         self.pc = self.cpu.RIP = ret_addr
@@ -196,6 +242,7 @@ class jitter_x86_64(jitter):
     # cdecl
     func_args_cdecl = func_args_stdcall
     func_ret_cdecl = func_ret_stdcall
+    func_prepare_cdecl = func_prepare_stdcall
 
     # System V
 

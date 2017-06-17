@@ -1,4 +1,3 @@
-import os
 import logging
 from argparse import ArgumentParser
 from pdb import pm
@@ -9,16 +8,13 @@ from miasm2.expression.expression import ExprId
 from miasm2.core.interval import interval
 from miasm2.analysis.machine import Machine
 from miasm2.analysis.data_flow import dead_simp, DiGraphDefUse, ReachingDefinitions
+from miasm2.expression.simplifications import expr_simp
 
 log = logging.getLogger("dis")
 console_handler = logging.StreamHandler()
 console_handler.setFormatter(logging.Formatter("%(levelname)-5s: %(message)s"))
 log.addHandler(console_handler)
 log.setLevel(logging.INFO)
-
-filename = os.environ.get('PYTHONSTARTUP')
-if filename and os.path.isfile(filename):
-    execfile(filename)
 
 
 parser = ArgumentParser("Disassemble a binary")
@@ -42,8 +38,8 @@ parser.add_argument('-z', "--dis-nulstart-block", action="store_true",
                     help="Do not disassemble NULL starting block")
 parser.add_argument('-l', "--dontdis-retcall", action="store_true",
                     help="If set, disassemble only call destinations")
-parser.add_argument('-s', "--simplify", action="store_true",
-                    help="Use the liveness analysis pass")
+parser.add_argument('-s', "--simplify", action="count",
+                    help="Apply simplifications rules (liveness, graph simplification, ...)")
 parser.add_argument('-o', "--shiftoffset", default=None,
                     type=lambda x: int(x, 0),
                     help="Shift input binary by an offset")
@@ -210,7 +206,7 @@ if args.gen_ir:
     for label, block in ir_arch_a.blocks.iteritems():
         print block
 
-    if args.simplify:
+    if args.simplify > 0:
         dead_simp(ir_arch_a)
 
     if args.defuse:
@@ -221,3 +217,15 @@ if args.gen_ir:
     open('graph_irflow.dot', 'w').write(out)
     out = ir_arch.graph.dot()
     open('graph_irflow_raw.dot', 'w').write(out)
+
+    if args.simplify > 1:
+        ir_arch_a.simplify(expr_simp)
+        modified = True
+        while modified:
+            modified = False
+            modified |= dead_simp(ir_arch_a)
+            modified |= ir_arch_a.remove_empty_assignblks()
+            modified |= ir_arch_a.remove_jmp_blocks()
+            modified |= ir_arch_a.merge_blocks()
+
+        open('graph_irflow_reduced.dot', 'w').write(ir_arch_a.graph.dot())

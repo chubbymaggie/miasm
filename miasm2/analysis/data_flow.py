@@ -2,6 +2,7 @@
 
 from collections import namedtuple
 from miasm2.core.graph import DiGraph
+from miasm2.ir.ir import AssignBlock, IRBlock
 
 class ReachingDefinitions(dict):
     """
@@ -242,11 +243,18 @@ def dead_simp(ir_a):
     Source : Kennedy, K. (1979). A survey of data flow analysis techniques.
     IBM Thomas J. Watson Research Division, page 43
     """
+    modified = False
     reaching_defs = ReachingDefinitions(ir_a)
     defuse = DiGraphDefUse(reaching_defs, deref_mem=True)
     useful = set(dead_simp_useful_instrs(defuse, reaching_defs))
     for block in ir_a.blocks.itervalues():
+        irs = []
         for idx, assignblk in enumerate(block.irs):
-            for lval in assignblk.keys():
+            new_assignblk = dict(assignblk)
+            for lval in assignblk:
                 if InstrNode(block.label, idx, lval) not in useful:
-                    del assignblk[lval]
+                    del new_assignblk[lval]
+                    modified = True
+            irs.append(AssignBlock(new_assignblk, assignblk.instr))
+        ir_a.blocks[block.label] = IRBlock(block.label, irs)
+    return modified

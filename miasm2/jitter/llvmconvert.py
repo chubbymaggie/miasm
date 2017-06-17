@@ -242,23 +242,6 @@ class LLVMContext_JIT(LLVMContext):
                                               "args": [LLVMType.IntType(k),
                                                        LLVMType.IntType(k)]}})
 
-        for k in [16, 32, 64]:
-            self.add_fc({"imod%s" % k: {"ret": LLVMType.IntType(k),
-                                        "args": [p8,
-                                                 LLVMType.IntType(k),
-                                                 LLVMType.IntType(k)]}})
-            self.add_fc({"idiv%s" % k: {"ret": LLVMType.IntType(k),
-                                        "args": [p8,
-                                                 LLVMType.IntType(k),
-                                                 LLVMType.IntType(k)]}})
-            self.add_fc({"umod%s" % k: {"ret": LLVMType.IntType(k),
-                                        "args": [p8,
-                                                 LLVMType.IntType(k),
-                                                 LLVMType.IntType(k)]}})
-            self.add_fc({"udiv%s" % k: {"ret": LLVMType.IntType(k),
-                                        "args": [p8,
-                                                 LLVMType.IntType(k),
-                                                 LLVMType.IntType(k)]}})
 
     def add_log_functions(self):
         "Add functions for state logging"
@@ -503,15 +486,19 @@ class LLVMFunction():
             var_casted = var
         self.builder.ret(var_casted)
 
-    def canonize_label_name(self, label):
+    @staticmethod
+    def canonize_label_name(label):
         """Canonize @label names to a common form.
         @label: str or asmlabel instance"""
         if isinstance(label, str):
             return label
-        elif isinstance(label, m2_asmblock.AsmLabel):
-            return "label_%s" % label.name
-        elif m2_asmblock.expr_is_label(label):
-            return "label_%s" % label.name.name
+        if m2_asmblock.expr_is_label(label):
+            label = label.name
+        if isinstance(label, m2_asmblock.AsmLabel):
+            if label.offset is None:
+                return "label_%s" % label.name
+            else:
+                return "label_%X" % label.offset
         else:
             raise ValueError("label must either be str or asmlabel")
 
@@ -525,7 +512,8 @@ class LLVMFunction():
 
         Get or create a (LLVM module-)global constant with *name* or *value*.
         """
-        module = self.mod
+        if name in self.mod.globals:
+            return self.mod.globals[name]
         data = llvm_ir.GlobalVariable(self.mod, value.type, name=name)
         data.global_constant = True
         data.initializer = value
@@ -741,11 +729,21 @@ class LLVMFunction():
                 return ret
 
             if op in ["imod", "idiv", "umod", "udiv"]:
-                fc_ptr = self.mod.get_global(
-                    "%s%s" % (op, expr.args[0].size))
-                args_casted = [self.add_ir(arg) for arg in expr.args]
-                args = [self.local_vars["vmcpu"]] + args_casted
-                ret = builder.call(fc_ptr, args)
+                assert len(expr.args) == 2
+
+                arg_b = self.add_ir(expr.args[1])
+                arg_a = self.add_ir(expr.args[0])
+
+                if op == "imod":
+                    callback = builder.srem
+                elif op == "idiv":
+                    callback = builder.sdiv
+                elif op == "umod":
+                    callback = builder.urem
+                elif op == "udiv":
+                    callback = builder.udiv
+
+                ret = callback(arg_a, arg_b)
                 self.update_cache(expr, ret)
                 return ret
 
@@ -999,10 +997,10 @@ class LLVMFunction():
         # Reactivate object caching
         self.main_stream = current_main_stream
 
-    def gen_pre_code(self, attributes):
-        if attributes.log_mn:
-            self.printf("%.8X %s\n" % (attributes.instr.offset,
-                                       attributes.instr))
+    def gen_pre_code(self, instr_attrib):
+        if instr_attrib.log_mn:
+            self.printf("%.8X %s\n" % (instr_attrib.instr.offset,
+                                       instr_attrib.instr))
 
     def gen_post_code(self, attributes):
         if attributes.log_regs:
@@ -1016,8 +1014,6 @@ class LLVMFunction():
             fc_ptr = self.mod.get_global("check_invalid_code_blocs")
             self.builder.call(fc_ptr, [self.local_vars["vmmngr"]])
             self.check_memory_exception(next_instr, restricted_exception=False)
-        if attrib.set_exception or attrib.op_set_exception:
-            self.check_cpu_exception(next_instr, restricted_exception=False)
 
         if attrib.mem_read | attrib.mem_write:
             fc_ptr = self.mod.get_global("reset_memory_access")
@@ -1106,19 +1102,20 @@ class LLVMFunction():
         self.set_ret(dst)
 
 
-    def gen_irblock(self, attrib, instr, instr_offsets, irblock):
+    def gen_irblock(self, instr_attrib, attributes, instr_offsets, irblock):
         """
         Generate the code for an @irblock
-        @instr: the current instruction to translate
-        @irblock: an irbloc instance
-        @attrib: an Attributs instance
+        @instr_attrib: an Attributs instance or the instruction to translate
+        @attributes: list of Attributs corresponding to irblock assignments
         @instr_offsets: offset of all asmblock's instructions
+        @irblock: an irblock instance
         """
 
         case2dst = None
         case_value = None
+        instr = instr_attrib.instr
 
-        for assignblk in irblock.irs:
+        for index, assignblk in enumerate(irblock.irs):
             # Enable cache
             self.main_stream = True
             self.expr_cache = {}
@@ -1137,13 +1134,9 @@ class LLVMFunction():
                     values[dst] = self.add_ir(src)
 
             # Check memory access exception
-            if assignblk.mem_read:
+            if attributes[index].mem_read:
                 self.check_memory_exception(instr.offset,
                                             restricted_exception=True)
-
-            # Check operation exception
-            if assignblk.op_set_exception:
-                self.check_cpu_exception(instr.offset, restricted_exception=True)
 
             # Update the memory
             for dst, src in values.iteritems():
@@ -1151,7 +1144,7 @@ class LLVMFunction():
                     self.affect(src, dst)
 
             # Check memory write exception
-            if assignblk.mem_write:
+            if attributes[index].mem_write:
                 self.check_memory_exception(instr.offset,
                                             restricted_exception=True)
 
@@ -1161,14 +1154,14 @@ class LLVMFunction():
                     self.affect(src, dst)
 
             # Check post assignblk exception flags
-            if assignblk.set_exception:
+            if attributes[index].set_exception:
                 self.check_cpu_exception(instr.offset, restricted_exception=True)
 
         # Destination
         assert case2dst is not None
         if len(case2dst) == 1:
             # Avoid switch in this common case
-            self.gen_jump2dst(attrib, instr_offsets, case2dst.values()[0])
+            self.gen_jump2dst(instr_attrib, instr_offsets, case2dst.values()[0])
         else:
             current_bbl = self.builder.basic_block
 
@@ -1180,7 +1173,7 @@ class LLVMFunction():
                 bbl = self.append_basic_block(name)
                 case2bbl[case] = bbl
                 self.builder.position_at_start(bbl)
-                self.gen_jump2dst(attrib, instr_offsets, dst)
+                self.gen_jump2dst(instr_attrib, instr_offsets, dst)
 
             # Jump on the correct output
             self.builder.position_at_end(current_bbl)
@@ -1307,8 +1300,9 @@ class LLVMFunction():
 
 
         for instr, irblocks in zip(asmblock.lines, irblocks_list):
-            attrib = codegen.get_attributes(instr, irblocks, self.log_mn,
-                                            self.log_regs)
+            instr_attrib, irblocks_attributes = codegen.get_attributes(instr, irblocks,
+                                                                       self.log_mn,
+                                                                       self.log_regs)
 
             # Pre-create basic blocks
             for irblock in irblocks:
@@ -1316,16 +1310,16 @@ class LLVMFunction():
 
             # Generate the corresponding code
             for index, irblock in enumerate(irblocks):
-                self.llvm_context.ir_arch.irbloc_fix_regs_for_mode(
+                new_irblock = self.llvm_context.ir_arch.irbloc_fix_regs_for_mode(
                     irblock, self.llvm_context.ir_arch.attrib)
 
                 # Set the builder at the begining of the correct bbl
-                name = self.canonize_label_name(irblock.label)
+                name = self.canonize_label_name(new_irblock.label)
                 self.builder.position_at_end(self.get_basic_bloc_by_label(name))
 
                 if index == 0:
-                    self.gen_pre_code(attrib)
-                self.gen_irblock(attrib, instr, instr_offsets, irblock)
+                    self.gen_pre_code(instr_attrib)
+                self.gen_irblock(instr_attrib, irblocks_attributes[index], instr_offsets, new_irblock)
 
         # Gen finalize (see codegen::CGen) is unrecheable, except with delayslot
         self.gen_finalize(asmblock, codegen)
